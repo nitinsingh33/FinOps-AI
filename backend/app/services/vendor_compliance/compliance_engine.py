@@ -34,7 +34,7 @@ from app.models.vendor_compliance import (
     ComplianceStatus, SeverityLevel,
     VendorComplianceException, VendorMaster, VendorInvoice,
     VendorPayment, GSTR2BRecord, TDSChallan, TDSReturnRecord,
-    VendorScorecard, VendorMasterCleanupItem,
+    VendorScorecard, VendorMasterCleanupItem, TaxRule, TDSChallan,
 )
 from app.services.vendor_compliance.gst_checks import (
     validate_gstin_format, validate_pan_format, check_pan_gstin_consistency,
@@ -178,9 +178,19 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
             risk_score += SCORE_WEIGHTS["high"]
 
     if not vendor.is_gstin_verified:
-        risk_score += 10  # Unverified GSTIN penalty
+        exc = _add_exception(db, vendor_id, "MASTER_GSTIN_EVIDENCE_MISSING", "master_data", "medium",
+            "GSTIN evidence not verified", "The GSTIN format is not proof of active registration.",
+            "Verify registration status using an authoritative GST source.",
+            missing_information=["GST portal verification evidence"], evidence={"gstin": vendor.gstin})
+        exceptions.append(exc)
+        risk_score += 10
 
     if not vendor.is_pan_verified:
+        exc = _add_exception(db, vendor_id, "MASTER_PAN_EVIDENCE_MISSING", "master_data", "medium",
+            "PAN evidence not verified", "PAN format is not proof of operative status or ownership.",
+            "Verify PAN and operative status against authoritative evidence.",
+            missing_information=["PAN verification evidence"], evidence={"pan": vendor.pan})
+        exceptions.append(exc)
         risk_score += 10
 
     # MSME format check
@@ -226,7 +236,7 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
     for inv in invoices:
         # GST treatment check
         gst_ok, gst_err = validate_invoice_gst_treatment(
-            inv.supply_type, inv.cgst_amount, inv.sgst_amount, inv.igst_amount
+            inv.supply_type, inv.cgst_amount, inv.sgst_amount, inv.igst_amount, inv.is_rcm
         )
         if not gst_ok:
             exc = _add_exception(
@@ -298,8 +308,17 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
 
         # ITC 180-day rule
         inv_payments = payments_by_invoice.get(inv.id, [])
-        payment_date = inv_payments[0].payment_date if inv_payments else None
-        itc_status, itc_msg = check_itc_180_day_rule(inv.invoice_date, payment_date)
+        paid_total = sum((p.gross_amount_paid for p in inv_payments), Decimal("0"))
+        cumulative = Decimal("0")
+        full_payment_date = None
+        for pmt in sorted(inv_payments, key=lambda p: p.payment_date):
+            cumulative += pmt.gross_amount_paid
+            if cumulative >= inv.total_amount:
+                full_payment_date = pmt.payment_date
+                break
+        itc_status, itc_msg = check_itc_180_day_rule(
+            inv.invoice_date, full_payment_date, paid_total, inv.total_amount
+        )
         if itc_status == "reversal_required":
             exc = _add_exception(
                 db, vendor_id,
@@ -313,16 +332,30 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                 evidence={
                     "invoice_number": inv.invoice_number,
                     "invoice_date": str(inv.invoice_date),
-                    "payment_date": str(payment_date) if payment_date else "unknown",
+                    "payment_date": str(full_payment_date) if full_payment_date else "partial or unpaid",
+                    "paid_amount": str(paid_total),
+                    "invoice_amount": str(inv.total_amount),
                 },
-                amount_at_stake=inv.total_tax_amount,
+                amount_at_stake=(inv.total_tax_amount * max(inv.total_amount - paid_total, Decimal("0")) / inv.total_amount
+                                 if inv.total_amount else inv.total_tax_amount),
             )
             exceptions.append(exc)
             risk_score += SCORE_WEIGHTS["high"]
 
         # TDS checks
         if inv.tds_section:
-            rule = get_applicable_tds_rule(inv.tds_section, inv.invoice_date)
+            active_rules = db.query(TaxRule).filter(
+                TaxRule.tax_category == "tds",
+                TaxRule.section_1961 == inv.tds_section,
+                TaxRule.verification_status == "approved",
+                TaxRule.effective_from <= inv.invoice_date,
+            ).all()
+            active_rules = [r for r in active_rules if r.effective_to is None or r.effective_to >= inv.invoice_date]
+            rule_obj = max(active_rules, key=lambda r: r.effective_from) if active_rules else None
+            rule = ({"rule_code": rule_obj.rule_code, "rate_pct": rule_obj.rate_pct,
+                     "threshold_amount": rule_obj.threshold_amount, "tax_base": rule_obj.tax_base,
+                     "is_sample_rule": rule_obj.is_sample_rule, "version": rule_obj.version}
+                    if rule_obj else None)
             if rule:
                 gst_total = inv.cgst_amount + inv.sgst_amount + inv.igst_amount
                 tds_base = compute_tds_base(inv.total_amount, gst_total, rule["tax_base"])
@@ -366,6 +399,15 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                         )
                         exceptions.append(exc)
                         risk_score += SCORE_WEIGHTS["high"]
+            else:
+                exc = _add_exception(db, vendor_id, "TDS_RULE_UNVERIFIED", "tds", "medium",
+                    f"TDS rule not verified for invoice {inv.invoice_number}",
+                    f"No approved, effective tax rule is configured for section {inv.tds_section}; no rate was assumed.",
+                    "Have the tax team configure and approve a dated rule before assessing deduction.",
+                    invoice_id=inv.id, missing_information=["Approved rule, source and effective date"],
+                    evidence={"section": inv.tds_section, "invoice_date": str(inv.invoice_date)})
+                exceptions.append(exc)
+                risk_score += SCORE_WEIGHTS["medium"]
 
             # Foreign vendor TDS check
             if vendor.vendor_type == "foreign":
@@ -393,15 +435,24 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
         # MSME check per invoice
         if vendor.msme_type != "non_msme":
             inv_payments_for_msme = payments_by_invoice.get(inv.id, [])
-            payment_date_msme = inv_payments_for_msme[0].payment_date if inv_payments_for_msme else None
+            paid_msme = sum((p.gross_amount_paid for p in inv_payments_for_msme), Decimal("0"))
+            cumulative_msme = Decimal("0")
+            full_payment_date_msme = None
+            for pmt in sorted(inv_payments_for_msme, key=lambda p: p.payment_date):
+                cumulative_msme += pmt.gross_amount_paid
+                if cumulative_msme >= inv.total_amount:
+                    full_payment_date_msme = pmt.payment_date
+                    break
             msme_result = check_msme_payment_deadline(
                 invoice_date=inv.invoice_date,
                 acceptance_date=inv.acceptance_date,
-                payment_date=payment_date_msme,
+                payment_date=full_payment_date_msme,
                 is_disputed=inv.is_disputed,
                 msme_type=vendor.msme_type,
                 udyam_number=vendor.udyam_number,
                 is_msme_verified=vendor.is_msme_verified,
+                paid_amount=paid_msme,
+                invoice_amount=inv.total_amount,
             )
             if msme_result["is_flagged"]:
                 exc = _add_exception(
@@ -417,13 +468,15 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                         "invoice_number": inv.invoice_number,
                         "invoice_date": str(inv.invoice_date),
                         "acceptance_date": str(inv.acceptance_date) if inv.acceptance_date else None,
-                        "payment_date": str(payment_date_msme) if payment_date_msme else "pending",
+                        "payment_date": str(full_payment_date_msme) if full_payment_date_msme else "partial or pending",
+                        "paid_amount": str(paid_msme),
+                        "invoice_amount": str(inv.total_amount),
                         "days_taken": msme_result.get("days_taken"),
                         "msme_type": vendor.msme_type,
                         "udyam_number": vendor.udyam_number,
                     },
                     missing_information=msme_result.get("missing_evidence"),
-                    amount_at_stake=inv.total_amount,
+                    amount_at_stake=max(inv.total_amount - paid_msme, Decimal("0")),
                 )
                 exceptions.append(exc)
                 risk_score += SCORE_WEIGHTS["high"]
@@ -435,12 +488,22 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
     if tds_invoices:
         total_deducted = sum(inv.tds_deducted_amount for inv in tds_invoices)
 
-        # Sum from challan records linked to vendor's PAN
-        challans = []
+        # Reconcile deducted → linked government challans → reported return.
         if vendor.pan:
             returns = db.query(TDSReturnRecord).filter_by(deductee_pan=vendor.pan).all()
             total_reported = sum(r.tax_deducted for r in returns)
-            total_deposited = sum(r.tax_deposited for r in returns)
+            challan_numbers = [r.challan_no for r in returns if r.challan_no]
+            challans = db.query(TDSChallan).filter(TDSChallan.challan_no.in_(challan_numbers)).all() if challan_numbers else []
+            total_deposited = sum((c.tax_amount for c in challans), Decimal("0"))
+
+            if not challans:
+                exc = _add_exception(db, vendor_id, "TDS_DEPOSIT_EVIDENCE_MISSING", "tds", "medium",
+                    "TDS deposit evidence is missing", "No government challan could be linked to this vendor's reported TDS records.",
+                    "Provide challan records and link each return line to its challan.",
+                    missing_information=["Linked ITNS 281 challan evidence"],
+                    evidence={"return_lines": len(returns), "challan_references": challan_numbers})
+                exceptions.append(exc)
+                risk_score += SCORE_WEIGHTS["medium"]
 
             recon = three_way_tds_reconciliation(total_deducted, total_deposited, total_reported)
             for issue in recon.get("issues", []):
@@ -456,6 +519,8 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                         "tds_deducted": str(total_deducted),
                         "tds_deposited": str(total_deposited),
                         "tds_reported": str(total_reported),
+                        "challan_count": len(challans),
+                        "return_line_count": len(returns),
                     },
                     amount_at_stake=Decimal(issue.get("amount_at_stake", "0")),
                 )
@@ -497,9 +562,15 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
 
     # Total amount at stake at vendor level (unique per check_code + invoice)
     # Prevent double-counting: sum from exceptions, one entry per exception record
-    total_at_stake = sum(
-        (e.amount_at_stake or Decimal("0")) for e in exceptions
-    )
+    invoice_exposure: Dict[str, Decimal] = {}
+    master_exposure = Decimal("0")
+    for exc in exceptions:
+        amount = exc.amount_at_stake or Decimal("0")
+        if exc.invoice_id:
+            invoice_exposure[exc.invoice_id] = max(invoice_exposure.get(exc.invoice_id, Decimal("0")), amount)
+        else:
+            master_exposure += amount
+    total_at_stake = sum(invoice_exposure.values(), master_exposure)
 
     summary_reasons = [
         f"{e.check_code}: {e.title}" for e in exceptions[:10]  # top 10

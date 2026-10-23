@@ -124,11 +124,17 @@ def validate_invoice_gst_treatment(
     cgst: Decimal,
     sgst: Decimal,
     igst: Decimal,
+    is_rcm: bool = False,
 ) -> Tuple[bool, Optional[str]]:
     """
     Verify that the correct GST component is used based on declared supply type.
     Returns (is_correct, error_message).
     """
+    # In a reverse-charge transaction the recipient accounts for GST. GST
+    # charged by the supplier is therefore a document exception; routing is
+    # still determined by place of supply when recipient-side tax is assessed.
+    if is_rcm and any(value > Decimal("0") for value in (cgst, sgst, igst)):
+        return False, "Reverse-charge invoice records supplier-charged GST; verify the invoice and recipient-side tax evidence."
     if supply_type == "intra_state":
         if igst > Decimal("0"):
             return False, (
@@ -157,6 +163,9 @@ ITC_PAYMENT_DAYS = 180  # days from invoice date to pay supplier
 def check_itc_180_day_rule(
     invoice_date: date,
     payment_date: Optional[date],
+    paid_amount: Optional[Decimal] = None,
+    invoice_amount: Optional[Decimal] = None,
+    as_of_date: Optional[date] = None,
 ) -> Tuple[str, Optional[str]]:
     """
     Check ITC eligibility based on 180-day payment rule.
@@ -166,14 +175,18 @@ def check_itc_180_day_rule(
     - If paid within 180 days: ITC is retained
     - If not paid within 180 days: ITC must be reversed (with interest)
     """
-    if payment_date is None:
+    fully_paid = (paid_amount is None or invoice_amount is None or paid_amount >= invoice_amount)
+    check_date = payment_date if fully_paid else (as_of_date or date.today())
+    if check_date is None:
         return "pending", "Payment date unknown — ITC eligibility cannot be confirmed"
 
-    days = (payment_date - invoice_date).days
+    days = (check_date - invoice_date).days
     if days <= ITC_PAYMENT_DAYS:
+        if not fully_paid and days >= 0:
+            return "pending", f"Invoice is only partially paid ({paid_amount} of {invoice_amount}); unpaid balance remains within the 180-day period."
         return "eligible", None
     return "reversal_required", (
-        f"Payment made {days} days after invoice date (limit: {ITC_PAYMENT_DAYS} days). "
+        f"Unpaid consideration remained {days} days after invoice date (limit: {ITC_PAYMENT_DAYS} days). "
         f"ITC of INR {{}} must be reversed with applicable interest."
     )
 

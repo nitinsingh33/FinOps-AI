@@ -14,7 +14,8 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.api.v1.routers import (
-    health, uploads, jobs, reconciliation, exceptions, analytics, pricing, reports
+    health, uploads, jobs, reconciliation, exceptions, analytics, pricing, reports,
+    vendor_compliance,
 )
 
 settings = get_settings()
@@ -79,6 +80,7 @@ app.include_router(exceptions.router, prefix="/api/v1", tags=["Exceptions"])
 app.include_router(analytics.router, prefix="/api/v1", tags=["Analytics"])
 app.include_router(pricing.router, prefix="/api/v1", tags=["Pricing"])
 app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
+app.include_router(vendor_compliance.router, prefix="/api/v1")
 
 
 @app.exception_handler(Exception)

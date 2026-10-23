@@ -139,7 +139,10 @@ class TestReconciliationInvariants:
     def test_refund_excludes_failed(self):
         items = [("processed", Decimal("100")), ("failed", Decimal("50")),
                  ("cancelled", Decimal("25")), ("processed", Decimal("200"))]
-        total = sum(a for s, a in items if s not in ("failed", "cancelled"), Decimal("0"))
+        total = sum(
+            (a for s, a in items if s not in ("failed", "cancelled")),
+            Decimal("0"),
+        )
         assert total == Decimal("300")
 
     def test_missing_amount_is_none_not_zero(self):

@@ -181,10 +181,19 @@ def reconcile_gwa(db: Session, ctx: ReconciliationContext) -> None:
                 "currency": payment.currency,
             })
 
+            if payment.currency != matched_txn.currency:
+                _add_exception(
+                    ctx, ctx.run_id, ExceptionCategory.CURRENCY_MISMATCH, "gateway_a",
+                    f"Currency mismatch for payment {pid}: payment export={payment.currency}, transaction ledger={matched_txn.currency}. Amount comparison was skipped.",
+                    evidence=evidence, source_payment_id=pid,
+                    source_txn_id=matched_txn.gateway_txn_id, severity="high",
+                )
+
             # --- Step 2: Fee discrepancy check (only for captured INR payments) ---
             # The transaction file uses INR; the payment file may have other currencies
             # We only compare fees when both are in the same currency context
-            if matched_txn.currency == "INR" and payment.fee is not None and matched_txn.fee is not None:
+            if (payment.fee_currency == matched_txn.currency
+                    and payment.fee is not None and matched_txn.fee is not None):
                 fee_diff = abs(payment.fee - matched_txn.fee)
                 if fee_diff > Decimal("1.00"):  # 1 INR tolerance for rounding
                     _add_exception(
@@ -192,10 +201,10 @@ def reconcile_gwa(db: Session, ctx: ReconciliationContext) -> None:
                         ExceptionCategory.FEE_DISCREPANCY,
                         "gateway_a",
                         f"Fee mismatch for payment {pid}: "
-                        f"payments_export={payment.fee} INR, "
-                        f"transactions_export={matched_txn.fee} INR, "
-                        f"difference={fee_diff} INR",
-                        currency="INR",
+                            f"payments_export={payment.fee} {payment.fee_currency}, "
+                            f"transactions_export={matched_txn.fee} {matched_txn.currency}, "
+                            f"difference={fee_diff} {matched_txn.currency}",
+                        currency=matched_txn.currency,
                         amount_difference=fee_diff,
                         expected_value=matched_txn.fee,
                         observed_value=payment.fee,

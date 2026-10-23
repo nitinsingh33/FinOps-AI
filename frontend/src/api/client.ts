@@ -54,5 +54,14 @@ export const createPricingRule = (body: unknown) => api.post('/pricing-rules', b
 export const updatePricingRule = (id: string, body: unknown) => api.patch(`/pricing-rules/${id}`, body).then(r => r.data)
 export const createSavingsScenario = (body: unknown) => api.post('/savings-scenarios', body).then(r => r.data)
 
+// ─── Vendor compliance ────────────────────────────────────────
+export const fetchVendors = () => api.get('/vendor-compliance/vendors').then(r => r.data)
+export const fetchVendorScorecards = () => api.get('/vendor-compliance/scorecards').then(r => r.data)
+export const fetchVendorExceptions = () => api.get('/vendor-compliance/exceptions').then(r => r.data)
+export const fetchVendorCleanup = () => api.get('/vendor-compliance/master-cleanup').then(r => r.data)
+export const seedVendorData = () => api.post('/vendor-compliance/seed').then(r => r.data)
+export const runVendorChecks = () => api.post('/vendor-compliance/checks/run').then(r => r.data)
+export const scanVendorMaster = () => api.post('/vendor-compliance/master-cleanup/scan').then(r => r.data)
+
 // ─── Health ───────────────────────────────────────────────────
 export const fetchHealth = () => api.get('/health').then(r => r.data).catch(() => api.get('/../health').then(r => r.data))

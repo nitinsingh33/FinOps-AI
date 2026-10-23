@@ -88,20 +88,18 @@ def get_overview_stats(db: Session) -> Dict[str, Any]:
     result["gwb_category_breakdown"] = {r.reporting_category: r.count for r in gwb_cat}
 
     # --- Fees by gateway and currency ---
-    gwa_fees = (
-        db.query(
-            func.sum(Payment.fee).label("total_fee"),
-            func.sum(Payment.tax).label("total_tax"),
-        )
-        .filter(Payment.gateway == "gateway_a", Payment.fee.isnot(None))
-        .first()
+    gwa_fee_rows = (
+        db.query(Payment.fee_currency.label("currency"), func.sum(Payment.fee).label("total_fee"),
+                 Payment.tax_currency.label("tax_currency"), func.sum(Payment.tax).label("total_tax"))
+        .filter(Payment.gateway == "gateway_a")
+        .group_by(Payment.fee_currency, Payment.tax_currency)
+        .all()
     )
-    result["gateway_a_fees_inr"] = {
-        "total_fee": float(gwa_fees.total_fee or 0),
-        "total_tax": float(gwa_fees.total_tax or 0),
-        "currency": "INR",
-        "note": "Gateway A fees and taxes are denominated in INR per gateway ledger",
-    }
+    result["gateway_a_fees"] = [
+        {"currency": r.currency, "total_fee": float(r.total_fee or 0),
+         "tax_currency": r.tax_currency, "total_tax": float(r.total_tax or 0)}
+        for r in gwa_fee_rows
+    ]
 
     gwb_fees = (
         db.query(
@@ -129,6 +127,7 @@ def get_overview_stats(db: Session) -> Dict[str, Any]:
         .filter(
             Payment.gateway == "gateway_a",
             Payment.currency == "INR",
+            Payment.fee_currency == "INR",
             Payment.status == "captured",
             Payment.fee.isnot(None),
         )
@@ -149,6 +148,7 @@ def get_overview_stats(db: Session) -> Dict[str, Any]:
         .filter(
             GatewayTransaction.gateway == "gateway_b",
             GatewayTransaction.currency == "INR",
+            GatewayTransaction.fee.isnot(None),
             GatewayTransaction.txn_type == "charge",
         )
         .first()
@@ -200,8 +200,18 @@ def get_overview_stats(db: Session) -> Dict[str, Any]:
         .group_by(ReconciliationException.category)
         .all()
     )
-    result["open_exceptions"] = {r.category: r.count for r in open_exceptions}
+    result["open_exceptions_by_category"] = {r.category: r.count for r in open_exceptions}
     result["total_open_exceptions"] = sum(r.count for r in open_exceptions)
+    result["open_exceptions"] = result["total_open_exceptions"]
+
+    # KPI values are counts from persisted rows, never guessed from summaries.
+    result["total_payments"] = db.query(func.count(Payment.id)).scalar() or 0
+    result["total_transactions"] = db.query(func.count(GatewayTransaction.id)).scalar() or 0
+    result["total_refunds"] = db.query(func.count(Refund.id)).scalar() or 0
+    result["total_exceptions"] = db.query(func.count(ReconciliationException.id)).scalar() or 0
+    result["reconciliation_runs"] = db.query(func.count(ReconciliationRun.id)).scalar() or 0
+    result["matched_records"] = latest_run.matched_records if latest_run else 0
+    result["unmatched_records"] = latest_run.unmatched_records if latest_run else 0
 
     # --- Import activity ---
     recent_jobs = (
@@ -242,6 +252,8 @@ def get_gateway_cost_analysis(db: Session, gateway: Optional[str] = None) -> Dic
             rows = (
                 db.query(
                     Payment.currency,
+                    Payment.fee_currency,
+                    Payment.tax_currency,
                     Payment.payment_method,
                     Payment.card_network,
                     func.count(Payment.id).label("count"),
@@ -250,12 +262,14 @@ def get_gateway_cost_analysis(db: Session, gateway: Optional[str] = None) -> Dic
                     func.sum(Payment.tax).label("taxes"),
                 )
                 .filter(Payment.status == "captured", Payment.fee.isnot(None))
-                .group_by(Payment.currency, Payment.payment_method, Payment.card_network)
+                .group_by(Payment.currency, Payment.fee_currency, Payment.tax_currency, Payment.payment_method, Payment.card_network)
                 .all()
             )
             result["gateway_a"] = [
                 {
                     "currency": r.currency,
+                    "fee_currency": r.fee_currency,
+                    "tax_currency": r.tax_currency,
                     "payment_method": r.payment_method,
                     "card_network": r.card_network,
                     "transaction_count": r.count,
@@ -264,7 +278,7 @@ def get_gateway_cost_analysis(db: Session, gateway: Optional[str] = None) -> Dic
                     "total_taxes": float(r.taxes or 0),
                     "effective_fee_rate_pct": round(
                         float(r.fees) / float(r.gross) * 100, 4
-                    ) if r.gross and float(r.gross) > 0 and r.fees else None,
+                    ) if r.currency == r.fee_currency and r.gross and float(r.gross) > 0 and r.fees else None,
                 }
                 for r in rows
             ]
@@ -295,6 +309,8 @@ def get_gateway_cost_analysis(db: Session, gateway: Optional[str] = None) -> Dic
             result["gateway_b"] = [
                 {
                     "currency": r.currency,
+                    "fee_currency": r.currency,
+                    "tax_currency": r.currency,
                     "card_brand": r.card_brand,
                     "card_funding": r.card_funding,
                     "country": r.country,
@@ -309,4 +325,24 @@ def get_gateway_cost_analysis(db: Session, gateway: Optional[str] = None) -> Dic
                 for r in rows
             ]
 
+    result["breakdowns"] = [
+        {"gateway": "gateway_a", "currency": r["currency"], "fee_currency": r["fee_currency"],
+         "tax_currency": r["tax_currency"], "payment_method": r["payment_method"],
+         "payment_count": r["transaction_count"], "gross_volume": r["gross_volume"],
+         "total_fees": r["total_fees"], "total_tax": r["total_taxes"],
+         "effective_rate_pct": r["effective_fee_rate_pct"]}
+        for r in result.get("gateway_a", [])
+    ] + [
+        {"gateway": "gateway_b", "currency": r["currency"], "fee_currency": r["fee_currency"],
+         "tax_currency": r["tax_currency"], "payment_method": None,
+         "payment_count": r["transaction_count"], "gross_volume": r["gross_volume"],
+         "total_fees": r["total_fees"], "total_tax": 0,
+         "effective_rate_pct": r["effective_fee_rate_pct"]}
+        for r in result.get("gateway_b", [])
+    ]
+    result["summary"] = {
+        "gateway_a_records": sum(r["transaction_count"] for r in result.get("gateway_a", [])),
+        "gateway_b_records": sum(r["transaction_count"] for r in result.get("gateway_b", [])),
+        "currency_groups": len(result["breakdowns"]),
+    }
     return result

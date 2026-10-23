@@ -157,23 +157,25 @@ def run_import_job(db: Session, job_id: str) -> ImportJob:
             duplicate += 1
             continue
 
-        source_rec = SourceRecord(
-            id=str(uuid.uuid4()),
-            dataset_id=dataset.id,
-            job_id=job.id,
-            gateway=rec["gateway"],
-            dataset_type=rec["dataset_type"],
-            source_row_number=rec["source_row_number"],
-            source_identifier=src_id,
-            raw_data=rec["raw_data"],
-            import_warnings=rec.get("import_warnings"),
-        )
-        db.add(source_rec)
-        db.flush()  # get source_rec.id
-
-        # Persist normalized entity
         try:
-            _persist_normalized(db, source_rec.id, rec)
+            # Keep the provenance row and normalized entity atomic. A failed
+            # row can then be safely retried without an orphan blocking it.
+            with db.begin_nested():
+                source_rec = SourceRecord(
+                    id=str(uuid.uuid4()),
+                    dataset_id=dataset.id,
+                    job_id=job.id,
+                    gateway=rec["gateway"],
+                    dataset_type=rec["dataset_type"],
+                    source_row_number=rec["source_row_number"],
+                    source_identifier=src_id,
+                    raw_data=rec["raw_data"],
+                    import_warnings=rec.get("import_warnings"),
+                )
+                db.add(source_rec)
+                db.flush()
+                _persist_normalized(db, source_rec.id, rec)
+                db.flush()
             imported += 1
         except Exception as exc:
             skipped += 1

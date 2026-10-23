@@ -67,7 +67,8 @@ async def upload_dataset(
         raise HTTPException(status_code=400, detail=error)
 
     # Save to disk
-    unique_name = f"{uuid.uuid4()}_{file.filename}"
+    safe_filename = Path(file.filename or "upload.xlsx").name
+    unique_name = f"{uuid.uuid4()}_{safe_filename}"
     storage_path = str(UPLOAD_DIR / unique_name)
     with open(storage_path, "wb") as f:
         f.write(content)
@@ -99,17 +100,24 @@ async def upload_dataset(
     db.commit()
 
     # Trigger background import (sync fallback if Celery not available)
+    import_error = None
     try:
         from app.workers.tasks import run_import_task
         run_import_task.delay(job.id)
-    except Exception:
+    except Exception as queue_exc:
         # Run synchronously as fallback
         from app.services.import_service import run_import_job
         try:
             run_import_job(db, job.id)
             db.commit()
         except Exception as exc:
-            pass  # Job status will reflect failure
+            db.rollback()
+            failed_job = db.query(ImportJob).filter_by(id=job.id).first()
+            if failed_job:
+                failed_job.status = "failed"
+                failed_job.error_message = f"Queue unavailable ({queue_exc}); synchronous import failed: {exc}"[:2000]
+                db.commit()
+            import_error = str(exc)
 
     return {
         "dataset_id": dataset.id,
@@ -118,7 +126,8 @@ async def upload_dataset(
         "filename": dataset.original_filename,
         "dataset_type": dataset_type,
         "file_hash": file_hash,
-        "message": "File uploaded. Import job queued." if is_new else "File already imported. New job created.",
+        "message": (f"Upload saved but import failed: {import_error}" if import_error else
+                    "File uploaded. Import job queued." if is_new else "File already imported. New import job created."),
     }
 
 

@@ -108,10 +108,14 @@ def create_savings_scenario(body: SavingsScenarioCreate, db: Session = Depends(g
         limitations.append("No current gateway pricing rule selected — current fee is not estimated.")
     elif current_rule.is_illustrative:
         limitations.append("Current pricing rule is illustrative — not a verified contract rate.")
+    else:
+        limitations.append("Current pricing input is not independently verified against a signed contract.")
     if alt_rule is None:
         limitations.append("No alternative gateway pricing rule selected — alternative fee is not estimated.")
     elif alt_rule.is_illustrative:
         limitations.append("Alternative pricing rule is illustrative — not a verified contract rate.")
+    else:
+        limitations.append("Alternative pricing input is not independently verified against a signed contract.")
 
     scenario = SavingsScenario(
         id=str(uuid.uuid4()),
@@ -206,6 +210,7 @@ def _format_rule(rule: Optional[PricingRule]) -> Optional[dict]:
         "fixed_fee": str(rule.fixed_fee) if rule.fixed_fee else None,
         "tax_on_fee_pct": str(rule.tax_on_fee_pct) if rule.tax_on_fee_pct else None,
         "is_illustrative": rule.is_illustrative,
+        "evidence_status": "illustrative" if rule.is_illustrative else "unverified_input",
         "notes": rule.notes,
         "created_at": rule.created_at.isoformat(),
     }

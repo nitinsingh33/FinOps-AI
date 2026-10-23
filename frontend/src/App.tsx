@@ -7,6 +7,7 @@ import ExceptionsPage from './pages/ExceptionsPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import PricingPage from './pages/PricingPage'
 import ReportsPage from './pages/ReportsPage'
+import VendorCompliancePage from './pages/VendorCompliancePage'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="pricing" element={<PricingPage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="vendor-compliance" element={<VendorCompliancePage />} />
       </Route>
     </Routes>
   )

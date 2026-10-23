@@ -97,8 +97,8 @@ export default function PricingPage() {
                   <td className="td-amount">{rule.fixed_fee ?? '—'}</td>
                   <td className="td-amount">{rule.tax_on_fee_pct ? `${rule.tax_on_fee_pct}%` : '—'}</td>
                   <td>
-                    <span className={`badge ${rule.is_illustrative ? 'badge-warning' : 'badge-success'}`}>
-                      {rule.is_illustrative ? 'Illustrative' : 'Contract'}
+                    <span className={`badge ${rule.is_illustrative ? 'badge-warning' : 'badge-info'}`}>
+                      {rule.is_illustrative ? 'Illustrative' : 'Unverified input'}
                     </span>
                   </td>
                   <td className="text-sm text-muted">{formatDate(rule.created_at)}</td>
@@ -211,7 +211,7 @@ function AddPricingRuleModal({ onClose, onSubmit, loading }: {
             </div>
             <div className="form-group" style={{ gridColumn: '1/-1', flexDirection: 'row', alignItems: 'center' }}>
               <input type="checkbox" id="is_illustrative" checked={form.is_illustrative} onChange={e => set('is_illustrative', e.target.checked)} style={{ marginRight: 8, accentColor: 'var(--color-accent)' }} />
-              <label htmlFor="is_illustrative" className="form-label" style={{ marginBottom: 0 }}>Mark as Illustrative (not a verified contract rate)</label>
+              <label htmlFor="is_illustrative" className="form-label" style={{ marginBottom: 0 }}>Illustrative assumption (unmarked inputs are still unverified)</label>
             </div>
           </div>
           <div style={{ marginTop: 24, display: 'flex', justifyContent: 'flex-end', gap: 12 }}>

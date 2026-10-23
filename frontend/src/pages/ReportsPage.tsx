@@ -1,4 +1,4 @@
-import { FileDown, Download, AlertTriangle, CreditCard, RefreshCw, RotateCcw } from 'lucide-react'
+import { FileDown, Download, AlertTriangle, CreditCard, RefreshCw, RotateCcw, Printer } from 'lucide-react'
 
 const BASE = '/api/v1/reports'
 
@@ -107,6 +107,11 @@ export default function ReportsPage() {
         <h1 className="page-title">Reports</h1>
         <p className="page-subtitle">Download reconciliation data, exceptions, and payment records as CSV</p>
       </div>
+
+      <div className="card mb-8"><div className="card-body" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+        <div><strong>One-page Executive Summary</strong><p className="text-sm text-muted">Generated from persisted API data, with transaction currency groups kept separate.</p></div>
+        <a className="btn btn-secondary" href={`${BASE}/executive-summary`} target="_blank" rel="noreferrer"><Printer size={15} /> Open summary</a>
+      </div></div>
 
       {/* Main report cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 24, marginBottom: 40 }}>

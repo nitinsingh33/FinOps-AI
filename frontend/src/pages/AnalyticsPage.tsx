@@ -43,9 +43,9 @@ export default function AnalyticsPage() {
 
   // Pie for gateway split by volume
   const gatewayVolumes: Record<string, number> = {}
-  breakdowns.forEach((b: { gateway: string; gross_volume: number }) => {
+  breakdowns.forEach((b: { gateway: string; payment_count: number }) => {
     const gw = b.gateway ?? 'unknown'
-    gatewayVolumes[gw] = (gatewayVolumes[gw] ?? 0) + (b.gross_volume ?? 0)
+    gatewayVolumes[gw] = (gatewayVolumes[gw] ?? 0) + (b.payment_count ?? 0)
   })
   const pieData = Object.entries(gatewayVolumes).map(([name, value]) => ({ name, value: Math.round(value) }))
 
@@ -57,7 +57,7 @@ export default function AnalyticsPage() {
     <div className="page-wrapper">
       <div className="page-header">
         <h1 className="page-title">Analytics</h1>
-        <p className="page-subtitle">Gateway cost breakdown, settlement analysis, and volume trends</p>
+            <p className="page-subtitle">Observed fees from imported gateway records, grouped by currency. These are not verified contract rates.</p>
       </div>
 
       {/* Summary stats */}
@@ -126,7 +126,7 @@ export default function AnalyticsPage() {
           <div className="card-header">
             <span className="card-title">
               <TrendingUp size={16} color="var(--color-cyan)" />
-              Volume Split by Gateway
+              Record Count by Gateway
             </span>
           </div>
           <div className="card-body">
@@ -155,7 +155,7 @@ export default function AnalyticsPage() {
                         {d.name === 'gateway_a' ? 'Gateway A' : 'Gateway B'}
                       </span>
                       <span style={{ fontSize: 13, fontWeight: 600, marginLeft: 8, color: 'var(--color-text-primary)' }}>
-                        {d.value.toLocaleString('en-IN')}
+                        {d.value.toLocaleString('en-IN')} records
                       </span>
                     </div>
                   ))}
@@ -184,24 +184,24 @@ export default function AnalyticsPage() {
                   <th>Payment Method</th>
                   <th>Payments</th>
                   <th>Gross Volume</th>
-                  <th>Total Fees</th>
-                  <th>Tax</th>
+                  <th>Total Fees ({'fee currency'})</th>
+                  <th>Tax ({'tax currency'})</th>
                   <th>Eff. Rate %</th>
                 </tr>
               </thead>
               <tbody>
-                {breakdowns.slice(0, 20).map((b: { gateway: string; currency: string; payment_method: string | null; payment_count: number; gross_volume: number; total_fees: number; total_tax: number; effective_rate_pct: number }, i: number) => (
+                {breakdowns.slice(0, 20).map((b: { gateway: string; currency: string; fee_currency?: string; tax_currency?: string; payment_method: string | null; payment_count: number; gross_volume: number; total_fees: number; total_tax: number; effective_rate_pct: number | null }, i: number) => (
                   <tr key={i}>
                     <td><span className="badge badge-purple">{b.gateway}</span></td>
                     <td>{b.currency}</td>
                     <td className="text-sm text-muted">{b.payment_method ?? 'All'}</td>
                     <td>{b.payment_count?.toLocaleString('en-IN')}</td>
                     <td className="td-amount">{b.gross_volume?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
-                    <td className="td-amount text-danger">{b.total_fees?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
-                    <td className="td-amount">{b.total_tax?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td className="td-amount text-danger">{b.fee_currency ?? b.currency} {b.total_fees?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td className="td-amount">{b.tax_currency ?? b.currency} {b.total_tax?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                     <td>
-                      <span style={{ color: effectiveRateColor(b.effective_rate_pct) }}>
-                        {b.effective_rate_pct?.toFixed(3)}%
+                      <span style={{ color: b.effective_rate_pct == null ? 'var(--color-text-muted)' : effectiveRateColor(b.effective_rate_pct) }}>
+                        {b.effective_rate_pct == null ? 'Not comparable across currencies' : `${b.effective_rate_pct.toFixed(3)}%`}
                       </span>
                     </td>
                   </tr>

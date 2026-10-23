@@ -31,6 +31,9 @@ def check_msme_payment_deadline(
     msme_type: str = "non_msme",
     udyam_number: Optional[str] = None,
     is_msme_verified: bool = False,
+    paid_amount: Optional[Decimal] = None,
+    invoice_amount: Optional[Decimal] = None,
+    as_of_date: Optional[date] = None,
 ) -> Dict:
     """
     Check if payment complies with MSME 45-day rule.
@@ -91,7 +94,7 @@ def check_msme_payment_deadline(
     deadline = effective_date + timedelta(days=MSME_PAYMENT_DAYS)
 
     if payment_date is None:
-        today = date.today()
+        today = as_of_date or date.today()
         days_elapsed = (today - effective_date).days
         if days_elapsed > MSME_PAYMENT_DAYS:
             result["status"] = "breach"

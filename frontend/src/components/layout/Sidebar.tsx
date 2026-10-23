@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import {
   BarChart3, Upload, RefreshCw, AlertTriangle,
   LineChart, DollarSign, FileDown, Activity,
-  Zap
+  Zap, ShieldCheck
 } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchExceptions } from '../../api/client'
@@ -15,6 +15,7 @@ const navItems = [
   { to: '/analytics', label: 'Analytics', icon: LineChart },
   { to: '/pricing', label: 'Pricing & Savings', icon: DollarSign },
   { to: '/reports', label: 'Reports', icon: FileDown },
+  { to: '/vendor-compliance', label: 'Vendor Compliance', icon: ShieldCheck },
 ]
 
 export default function Sidebar() {

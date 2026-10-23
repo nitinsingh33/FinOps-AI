@@ -4,10 +4,11 @@ from __future__ import annotations
 import csv
 import io
 import uuid
+from html import escape
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -16,11 +17,39 @@ from app.models.models import ReconciliationException, Payment, GatewayTransacti
 router = APIRouter()
 
 
+@router.get("/reports/executive-summary", response_class=HTMLResponse)
+def executive_summary(db: Session = Depends(get_db)):
+    """A one-page, printable view backed only by persisted payment data."""
+    from app.services.analytics_service import get_overview_stats
+    from app.models.models import ReconciliationRun
+
+    data = get_overview_stats(db)
+    run = db.query(ReconciliationRun).filter_by(status="completed").order_by(ReconciliationRun.created_at.desc()).first()
+    volumes = data.get("gateway_a_volume", []) + data.get("gateway_b_volume", [])
+    volume_rows = "".join(
+        f"<tr><td>{escape(label)}</td><td>{escape(str(row['currency']))}</td>"
+        f"<td>{int(row['count']):,}</td><td>{float(row['total_gross']):,.2f}</td></tr>"
+        for label, rows in (("Gateway A", data.get("gateway_a_volume", [])), ("Gateway B", data.get("gateway_b_volume", [])))
+        for row in rows
+    ) or '<tr><td colspan="4">No imported volume data</td></tr>'
+    latest = (f"{run.id[:8]} · {run.matched_records or 0} matched · {run.exception_count or 0} exceptions · {run.completed_at.isoformat() if run.completed_at else 'completed'}"
+              if run else "No completed reconciliation run")
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>FinOps AI Executive Summary</title>
+    <style>body{{font:14px Arial,sans-serif;color:#172033;margin:32px}}h1{{margin-bottom:4px}}.muted{{color:#526079}}.grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0}}.tile{{border:1px solid #d7deea;border-radius:8px;padding:14px}}.value{{font-size:24px;font-weight:bold;margin-top:6px}}table{{border-collapse:collapse;width:100%;margin-top:10px}}td,th{{padding:9px;border-bottom:1px solid #d7deea;text-align:left}}.note{{margin-top:20px;padding:12px;background:#eef4ff}}@media print{{body{{margin:12mm}}}}</style></head><body>
+    <h1>FinOps AI · Executive Summary</h1><div class="muted">Generated from imported database records. Figures are separated by transaction currency.</div>
+    <div class="grid"><div class="tile">Payments<div class="value">{data.get('total_payments', 0):,}</div></div><div class="tile">Gateway transactions<div class="value">{data.get('total_transactions', 0):,}</div></div><div class="tile">Refund records<div class="value">{data.get('total_refunds', 0):,}</div></div><div class="tile">Open exceptions<div class="value">{data.get('open_exceptions', 0):,}</div></div></div>
+    <h2>Observed transaction volume</h2><table><thead><tr><th>Gateway</th><th>Currency</th><th>Records</th><th>Gross volume</th></tr></thead><tbody>{volume_rows}</tbody></table>
+    <h2>Latest reconciliation</h2><p>{escape(latest)}</p>
+    <div class="note">Observed gateway fees come from uploaded records. Configured pricing inputs and scenario results are estimates; contractual rates have not been independently verified.</div>
+    </body></html>""")
+
+
 @router.get("/reports/exceptions/download")
 def download_exceptions_csv(
     gateway: str = Query(None),
     category: str = Query(None),
     review_status: str = Query(None),
+    severity: str = Query(None),
     db: Session = Depends(get_db),
 ):
     """Download reconciliation exceptions as CSV."""
@@ -31,6 +60,8 @@ def download_exceptions_csv(
         q = q.filter(ReconciliationException.category == category)
     if review_status:
         q = q.filter(ReconciliationException.review_status == review_status)
+    if severity:
+        q = q.filter(ReconciliationException.severity == severity)
     exceptions = q.order_by(ReconciliationException.created_at.desc()).all()
 
     output = io.StringIO()

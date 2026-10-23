@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
     ai_model: str = Field(default="gpt-4o-mini", alias="AI_MODEL")
     ai_enabled: bool = Field(default=False, alias="AI_ENABLED")
+    ai_retention_approved: bool = Field(default=False, alias="AI_RETENTION_APPROVED")
 
     # Environment
     environment: str = Field(default="development", alias="ENVIRONMENT")
@@ -75,7 +76,7 @@ class Settings(BaseSettings):
 
     @property
     def is_ai_available(self) -> bool:
-        if not self.ai_enabled:
+        if not self.ai_enabled or not self.ai_retention_approved:
             return False
         if self.ai_provider == "openai":
             return bool(self.openai_api_key)
