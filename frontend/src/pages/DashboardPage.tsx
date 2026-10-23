@@ -54,11 +54,11 @@ export default function DashboardPage() {
     }))
 
   // Exception category distribution
-  const categories = excData?.items?.reduce((acc: Record<string, number>, e: ReconciliationException) => {
+  const categories: Record<string, number> = excData?.items?.reduce((acc: Record<string, number>, e: ReconciliationException) => {
     acc[e.category] = (acc[e.category] ?? 0) + 1
     return acc
   }, {}) ?? {}
-  const pieData = Object.entries(categories).map(([name, value]) => ({ name, value }))
+  const pieData: { name: string; value: number }[] = Object.entries(categories).map(([name, value]) => ({ name, value }))
 
   const statCards = [
     {

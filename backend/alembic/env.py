@@ -11,13 +11,16 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Import all models so Alembic can detect them
+from app.core.config import get_settings
 from app.db.session import Base
 from app.models.models import *  # noqa
+from app.models.vendor_compliance import *  # noqa
 
 target_metadata = Base.metadata
 
-# Use DATABASE_URL from environment if set
-db_url = os.environ.get("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+# Use DATABASE_URL from environment or settings
+settings = get_settings()
+db_url = os.environ.get("DATABASE_URL") or settings.database_url
 config.set_main_option("sqlalchemy.url", db_url)
 
 

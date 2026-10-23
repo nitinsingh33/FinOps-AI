@@ -291,36 +291,58 @@ def reconcile_gwa(db: Session, ctx: ReconciliationContext) -> None:
                     severity="high",
                 )
 
-        # --- Step 6: Refund matching ---
+        # --- Step 6: Refund matching (with cumulative partial refund aggregation) ---
         linked_refunds = refund_by_payment_id.get(pid, [])
-        for refund in linked_refunds:
-            # Refund currency may differ from payment currency (cross-currency refunds)
-            # We do NOT compare amounts across currencies
-            if (payment.amount_refunded is not None
-                    and refund.currency == payment.currency):
-                # Check refund amount vs amount_refunded field on payment
-                refund_diff = abs(refund.amount - payment.amount_refunded)
-                if refund_diff > Decimal("1.00"):
-                    _add_exception(
-                        ctx, ctx.run_id,
-                        ExceptionCategory.REFUND_AMOUNT_MISMATCH,
-                        "gateway_a",
-                        f"Refund amount mismatch for payment {pid}: "
-                        f"refund_record={refund.amount} {refund.currency}, "
-                        f"payment.amount_refunded={payment.amount_refunded} {payment.currency}, "
-                        f"difference={refund_diff}",
-                        currency=refund.currency,
-                        amount_difference=refund_diff,
-                        expected_value=payment.amount_refunded,
-                        observed_value=refund.amount,
-                        evidence={
-                            "refund_id": refund.gateway_refund_id,
-                            "payment_id": pid,
-                        },
-                        source_payment_id=pid,
-                        source_refund_id=refund.gateway_refund_id,
-                        severity="medium",
-                    )
+        if linked_refunds and payment.amount_refunded is not None:
+            # Group refunds by currency to strictly preserve currency boundaries
+            refunds_by_curr: Dict[str, List[Refund]] = {}
+            for r in linked_refunds:
+                if r.status.lower() not in ("failed", "cancelled"):
+                    refunds_by_curr.setdefault(r.currency, []).append(r)
+
+            for ref_curr, curr_refunds in refunds_by_curr.items():
+                if ref_curr == payment.currency:
+                    # Aggregate all valid partial refunds for this payment
+                    total_refunded_records = sum((r.amount for r in curr_refunds), Decimal(0))
+                    refund_diff = abs(total_refunded_records - payment.amount_refunded)
+                    if refund_diff > Decimal("1.00"):
+                        _add_exception(
+                            ctx, ctx.run_id,
+                            ExceptionCategory.REFUND_AMOUNT_MISMATCH,
+                            "gateway_a",
+                            f"Cumulative refund mismatch for payment {pid}: "
+                            f"sum_of_refund_records={total_refunded_records} {ref_curr} ({len(curr_refunds)} refund(s)), "
+                            f"payment.amount_refunded={payment.amount_refunded} {payment.currency}, "
+                            f"difference={refund_diff}",
+                            currency=ref_curr,
+                            amount_difference=refund_diff,
+                            expected_value=payment.amount_refunded,
+                            observed_value=total_refunded_records,
+                            evidence={
+                                "refund_ids": [r.gateway_refund_id for r in curr_refunds],
+                                "payment_id": pid,
+                                "refund_count": len(curr_refunds),
+                            },
+                            source_payment_id=pid,
+                            source_refund_id=curr_refunds[0].gateway_refund_id if curr_refunds else None,
+                            severity="medium",
+                        )
+
+    # Detect orphan/unmatched refunds referencing missing payments
+    known_payment_ids = {p.gateway_payment_id for p in payments if p.gateway_payment_id}
+    for r in refunds:
+        if r.gateway_payment_id and r.gateway_payment_id not in known_payment_ids:
+            _add_exception(
+                ctx, ctx.run_id,
+                ExceptionCategory.UNMATCHED_REFUND,
+                "gateway_a",
+                f"Refund {r.gateway_refund_id} references payment {r.gateway_payment_id} which does not exist in payments export",
+                currency=r.currency,
+                amount_at_stake=r.amount,
+                evidence={"refund_id": r.gateway_refund_id, "referenced_payment_id": r.gateway_payment_id},
+                source_refund_id=r.gateway_refund_id,
+                severity="high",
+            )
 
     # Unmatched transactions (in ledger but no payment record)
     for txn in txns:

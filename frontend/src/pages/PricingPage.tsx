@@ -272,7 +272,7 @@ function SavingsScenarioModal({ rules, onClose, onSubmit, loading, result }: {
                     </div>
                   ))}
                 </div>
-                {result.estimated_difference && (
+                {Boolean(result.estimated_difference) && (
                   <div style={{ marginTop: 20, textAlign: 'center' }}>
                     <div style={{ fontSize: 11, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Estimated Difference</div>
                     <div style={{ fontSize: 32, fontWeight: 800, color: parseFloat(result.estimated_difference as string) > 0 ? 'var(--color-success)' : 'var(--color-danger)', fontFamily: 'var(--font-mono)' }}>

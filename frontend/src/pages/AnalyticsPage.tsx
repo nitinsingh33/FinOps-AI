@@ -143,7 +143,7 @@ export default function AnalyticsPage() {
                       <Pie data={pieData} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={3} dataKey="value">
                         {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                       </Pie>
-                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: number) => v.toLocaleString('en-IN')} />
+                      <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v: any) => Number(v ?? 0).toLocaleString('en-IN')} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>

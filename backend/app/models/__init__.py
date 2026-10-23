@@ -16,6 +16,23 @@ from app.models.models import (
     UploadedDataset,
     AIInvestigation,
 )
+from app.models.vendor_compliance import (
+    ComplianceStatus,
+    ExceptionCategoryType,
+    GSTR2BRecord,
+    RuleApprovalStatus,
+    SeverityLevel,
+    TaxCategory,
+    TaxRule,
+    TDSChallan,
+    TDSReturnRecord,
+    VendorComplianceException,
+    VendorInvoice,
+    VendorMaster,
+    VendorMasterCleanupItem,
+    VendorPayment,
+    VendorScorecard,
+)
 
 __all__ = [
     "AuditEvent",
@@ -34,4 +51,19 @@ __all__ = [
     "SourceRecord",
     "UploadedDataset",
     "AIInvestigation",
+    "ComplianceStatus",
+    "ExceptionCategoryType",
+    "GSTR2BRecord",
+    "RuleApprovalStatus",
+    "SeverityLevel",
+    "TaxCategory",
+    "TaxRule",
+    "TDSChallan",
+    "TDSReturnRecord",
+    "VendorComplianceException",
+    "VendorInvoice",
+    "VendorMaster",
+    "VendorMasterCleanupItem",
+    "VendorPayment",
+    "VendorScorecard",
 ]

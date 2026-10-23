@@ -1,4 +1,4 @@
-import { useState, useRef, DragEvent } from 'react'
+import { useState, useRef, type DragEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Upload, FileSpreadsheet, CheckCircle2, XCircle, Clock, RefreshCw } from 'lucide-react'
 import { fetchUploads, uploadDataset } from '../api/client'
