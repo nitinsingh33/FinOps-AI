@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { AlertTriangle, Database, RefreshCw, ScanSearch, ShieldCheck } from 'lucide-react'
 import {
-  fetchVendors, fetchVendorExceptions, fetchVendorCleanup,
-  runVendorChecks, seedVendorData, scanVendorMaster,
+  fetchVendors, fetchVendorExceptions, fetchVendorCleanup, fetchVendorRules,
+  runVendorChecks, seedVendorData, scanVendorMaster, createVendorRule, approveVendorRule,
 } from '../api/client'
 
 type Vendor = {
@@ -12,22 +13,28 @@ type Vendor = {
 }
 type VendorException = { id: string; vendor_id: string; category: string; severity: string; title: string; description: string; amount_at_stake: string | null; currency: string; missing_information: string[]; is_synthetic_warning: boolean }
 type CleanupItem = { id: string; vendor_id: string; issue_type: string; severity: string; field_name: string; description: string; recommended_fix: string }
+type TaxRule = { id: string; rule_code: string; tax_category: string; section_1961: string | null; section_2025: string | null; description: string; rate_pct: string; threshold_amount: string; effective_from: string; effective_to: string | null; verification_status: string; version: string; source_reference: string | null; is_sample_rule: boolean }
 
 export default function VendorCompliancePage() {
   const qc = useQueryClient()
+  const [showRuleForm, setShowRuleForm] = useState(false)
   const vendors = useQuery({ queryKey: ['vendor-compliance', 'vendors'], queryFn: fetchVendors })
   const exceptions = useQuery({ queryKey: ['vendor-compliance', 'exceptions'], queryFn: fetchVendorExceptions })
   const cleanup = useQuery({ queryKey: ['vendor-compliance', 'cleanup'], queryFn: fetchVendorCleanup })
+  const rules = useQuery({ queryKey: ['vendor-compliance', 'rules'], queryFn: fetchVendorRules })
   const refresh = () => qc.invalidateQueries({ queryKey: ['vendor-compliance'] })
   const seed = useMutation({ mutationFn: seedVendorData, onSuccess: refresh })
   const run = useMutation({ mutationFn: runVendorChecks, onSuccess: refresh })
   const scan = useMutation({ mutationFn: scanVendorMaster, onSuccess: refresh })
+  const createRule = useMutation({ mutationFn: createVendorRule, onSuccess: () => { refresh(); setShowRuleForm(false) } })
+  const approveRule = useMutation({ mutationFn: ({ id, who }: { id: string; who: string }) => approveVendorRule(id, who), onSuccess: refresh })
   const rows: Vendor[] = vendors.data ?? []
   const issues: VendorException[] = exceptions.data ?? []
   const cleanupRows: CleanupItem[] = cleanup.data ?? []
+  const ruleRows: TaxRule[] = rules.data ?? []
   const assessed = rows.filter(v => v.scorecard)
   const inReview = issues.filter(e => e.missing_information.length > 0).length
-  const error = [vendors.error, exceptions.error, cleanup.error, seed.error, run.error, scan.error].find(Boolean) as Error | undefined
+  const error = [vendors.error, exceptions.error, cleanup.error, rules.error, seed.error, run.error, scan.error, createRule.error, approveRule.error].find(Boolean) as Error | undefined
 
   return <div className="page-wrapper">
     <div className="page-header">
@@ -58,6 +65,37 @@ export default function VendorCompliancePage() {
         <td>{v.scorecard ? `${v.scorecard.currency} ${Number(v.scorecard.total_amount_at_stake).toLocaleString()}` : '—'}</td>
         <td>{v.scorecard ? `${v.scorecard.evidence_coverage.invoices_checked ?? 0} invoices` : '—'}</td>
       </tr>)}</tbody></table></div>
+    </section>
+    <section className="card mb-8"><div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span className="card-title">Versioned tax rules</span><button className="btn btn-secondary btn-sm" onClick={() => setShowRuleForm(v => !v)}>{showRuleForm ? 'Close' : 'Add rule'}</button></div>
+      <div className="card-body">
+        <p className="text-sm text-muted" style={{ marginBottom: 12 }}>Rules stay pending review until explicitly approved. Only approved rules with matching effective dates are used for TDS rate checks. Enter values from a reviewed source; the application does not supply legal rates.</p>
+        {showRuleForm && <form onSubmit={e => { e.preventDefault(); const d = new FormData(e.currentTarget); createRule.mutate({
+          rule_code: String(d.get('rule_code')), tax_category: String(d.get('tax_category')), description: String(d.get('description')),
+          rate_pct: String(d.get('rate_pct')), threshold_amount: String(d.get('threshold_amount') || '0'), tax_base: String(d.get('tax_base')),
+          effective_from: String(d.get('effective_from')), effective_to: String(d.get('effective_to') || '') || null,
+          section_1961: String(d.get('section_1961') || '') || null, section_2025: String(d.get('section_2025') || '') || null,
+          source_reference: String(d.get('source_reference')), version: String(d.get('version')),
+        }) }} style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10, marginBottom: 18 }}>
+          <input className="form-input" name="rule_code" placeholder="Rule code" required />
+          <select className="form-select" name="tax_category"><option value="tds">TDS</option><option value="gst">GST</option></select>
+          <input className="form-input" name="version" placeholder="Version" defaultValue="1.0" required />
+          <input className="form-input" name="description" placeholder="Description" required />
+          <input className="form-input" name="section_1961" placeholder="Section 1961 (if verified)" />
+          <input className="form-input" name="section_2025" placeholder="Section 2025 (if verified)" />
+          <input className="form-input" name="rate_pct" type="number" step="0.0001" placeholder="Rate %" required />
+          <input className="form-input" name="threshold_amount" type="number" step="0.01" placeholder="Threshold" defaultValue="0" />
+          <select className="form-select" name="tax_base"><option value="EXCLUDE_GST">Exclude GST</option><option value="GROSS">Gross</option><option value="NET">Net</option></select>
+          <input className="form-input" name="effective_from" type="date" required />
+          <input className="form-input" name="effective_to" type="date" />
+          <input className="form-input" name="source_reference" placeholder="Source reference" required />
+          <button className="btn btn-primary" type="submit" disabled={createRule.isPending}>Save as pending review</button>
+        </form>}
+        <div className="table-container"><table className="data-table"><thead><tr><th>Rule</th><th>Category / Section</th><th>Rate</th><th>Effective</th><th>Version</th><th>Approval</th></tr></thead><tbody>
+          {ruleRows.length === 0 ? <tr><td colSpan={6}>No configured tax rules.</td></tr> : ruleRows.map(rule => <tr key={rule.id}><td><strong>{rule.rule_code}{rule.is_sample_rule ? ' · sample' : ''}</strong><div className="text-muted text-sm">{rule.description}</div><div className="text-muted text-sm">{rule.source_reference ?? 'Source reference missing'}</div></td>
+            <td>{rule.tax_category.toUpperCase()} · {rule.section_1961 ?? rule.section_2025 ?? 'section not mapped'}</td><td>{rule.rate_pct}%</td><td>{rule.effective_from}{rule.effective_to ? ` → ${rule.effective_to}` : ' onward'}</td><td>{rule.version}</td>
+            <td>{rule.verification_status === 'approved' ? <span className="badge badge-success">Approved</span> : rule.is_sample_rule ? <span className="badge badge-warning">Sample only</span> : <button className="btn btn-secondary btn-sm" onClick={() => { const who = window.prompt('Approver name'); if (who?.trim()) approveRule.mutate({ id: rule.id, who: who.trim() }) }}>Approve</button>}</td></tr>)}
+        </tbody></table></div>
+      </div>
     </section>
     <div className="grid-2">
       <section className="card"><div className="card-header"><span className="card-title">Compliance exceptions</span></div><div className="card-body" style={{ display: 'grid', gap: 12 }}>

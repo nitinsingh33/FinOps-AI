@@ -33,8 +33,24 @@ KNOWN_CURRENCIES = {
 }
 
 
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _optional_text(value: Any) -> Optional[str]:
+    if _is_missing(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def normalize_currency(raw: Any) -> Optional[str]:
-    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+    if _is_missing(raw):
         return None
     code = str(raw).strip().upper()
     if code in KNOWN_CURRENCIES:
@@ -44,7 +60,7 @@ def normalize_currency(raw: Any) -> Optional[str]:
 
 def safe_decimal(value: Any, field_name: str = "") -> Tuple[Optional[Decimal], Optional[str]]:
     """Return (decimal_value, warning_message). Never raises."""
-    if value is None or (isinstance(value, float) and pd.isna(value)):
+    if _is_missing(value):
         return None, None
     raw = str(value).strip().replace(",", "")
     if raw == "" or raw.lower() in ("nan", "none", "null", "-"):
@@ -57,7 +73,7 @@ def safe_decimal(value: Any, field_name: str = "") -> Tuple[Optional[Decimal], O
 
 def parse_dt_gwa(raw: Any) -> Tuple[Optional[datetime], Optional[str]]:
     """Parse Gateway A date strings: DD/MM/YYYY HH:MM:SS or DD-MM-YYYY."""
-    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+    if _is_missing(raw):
         return None, None
     if isinstance(raw, datetime):
         return raw.replace(tzinfo=timezone.utc) if raw.tzinfo is None else raw, None
@@ -73,7 +89,7 @@ def parse_dt_gwa(raw: Any) -> Tuple[Optional[datetime], Optional[str]]:
 
 def parse_dt_gwb(raw: Any) -> Tuple[Optional[datetime], Optional[str]]:
     """Parse Gateway B timestamps (pandas already parses most as datetime64)."""
-    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+    if _is_missing(raw):
         return None, None
     if isinstance(raw, datetime):
         return raw.replace(tzinfo=timezone.utc) if raw.tzinfo is None else raw, None
@@ -498,23 +514,23 @@ def parse_gwb_balance(filepath: str) -> ParseResult:
 
         # Source/charge links
         sid = row.get("source_id")
-        rec["gateway_payment_id"] = str(sid).strip() if sid and not (isinstance(sid, float) and pd.isna(sid)) else None
+        rec["gateway_payment_id"] = _optional_text(sid)
 
         charge_id = row.get("charge_id")
         pmt_intent = row.get("payment_intent_id")
 
         # Geography
-        country = row.get("country")
-        rec["country"] = str(country).strip().upper() if country and not (isinstance(country, float) and pd.isna(country)) else None
+        country = _optional_text(row.get("country"))
+        rec["country"] = country.upper() if country else None
 
         # Card details
-        rec["card_brand"] = str(row.get("card_brand", "")).strip() or None
-        rec["card_network"] = str(row.get("card_network", "")).strip() or None
-        rec["card_funding"] = str(row.get("card_funding", "")).strip() or None
+        rec["card_brand"] = _optional_text(row.get("card_brand"))
+        rec["card_network"] = _optional_text(row.get("card_network"))
+        rec["card_funding"] = _optional_text(row.get("card_funding"))
 
         # Payout/settlement
         payout_id = row.get("automatic_payout_id")
-        rec["payout_id"] = str(payout_id).strip() if payout_id and not (isinstance(payout_id, float) and pd.isna(payout_id)) else None
+        rec["payout_id"] = _optional_text(payout_id)
 
         # Timestamps — GWB timestamps already parsed as datetime64 by pandas
         dt_created, warn = parse_dt_gwb(row.get("created_utc"))
@@ -535,14 +551,14 @@ def parse_gwb_balance(filepath: str) -> ParseResult:
         rec["is_settled"] = rec["payout_id"] is not None
 
         rec["gateway_metadata"] = {
-            "charge_id": str(charge_id).strip() if charge_id and not (isinstance(charge_id, float) and pd.isna(charge_id)) else None,
-            "payment_intent_id": str(pmt_intent).strip() if pmt_intent and not (isinstance(pmt_intent, float) and pd.isna(pmt_intent)) else None,
-            "trace_id": str(row.get("trace_id", "")).strip() or None,
-            "product_names": str(row.get("product_names", "")).strip() or None,
-            "invoice_id": str(row.get("invoice_id", "")).strip() or None,
-            "subscription_id": str(row.get("subscription_id", "")).strip() or None,
-            "payout_reference_token": str(row.get("payout_reference_token", "")).strip() or None,
-            "dispute_reason": str(row.get("dispute_reason", "")).strip() or None,
+            "charge_id": _optional_text(charge_id),
+            "payment_intent_id": _optional_text(pmt_intent),
+            "trace_id": _optional_text(row.get("trace_id")),
+            "product_names": _optional_text(row.get("product_names")),
+            "invoice_id": _optional_text(row.get("invoice_id")),
+            "subscription_id": _optional_text(row.get("subscription_id")),
+            "payout_reference_token": _optional_text(row.get("payout_reference_token")),
+            "dispute_reason": _optional_text(row.get("dispute_reason")),
         }
 
         result.records.append(rec)

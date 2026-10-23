@@ -1,7 +1,3 @@
-"""
-Script to import all 4 dummy workbooks through the official import pipeline
-and verify idempotency and record counts.
-"""
 import os
 import sys
 from pathlib import Path

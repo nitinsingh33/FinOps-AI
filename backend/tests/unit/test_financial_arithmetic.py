@@ -225,6 +225,20 @@ class TestGSTINValidation:
         pan = extract_pan_from_gstin("27AABCU9603R1ZX")
         assert pan == "AABCU9603R"
 
+    def test_reverse_charge_supplier_tax_is_flagged(self):
+        from app.services.vendor_compliance.gst_checks import validate_invoice_gst_treatment
+        valid, message = validate_invoice_gst_treatment(
+            "intra_state", Decimal("900"), Decimal("900"), Decimal("0"), is_rcm=True
+        )
+        assert valid is False and "Reverse-charge" in message
+
+    def test_reverse_charge_without_supplier_tax_is_not_flagged(self):
+        from app.services.vendor_compliance.gst_checks import validate_invoice_gst_treatment
+        valid, message = validate_invoice_gst_treatment(
+            "intra_state", Decimal("0"), Decimal("0"), Decimal("0"), is_rcm=True
+        )
+        assert valid is True and message is None
+
 
 class TestPANValidation:
     def test_valid_pan(self):
@@ -232,10 +246,10 @@ class TestPANValidation:
         valid, _ = validate_pan_format("AABCU9603R")
         assert valid is True
 
-    def test_lowercase_invalid(self):
+    def test_lowercase_is_normalized(self):
         from app.services.vendor_compliance.gst_checks import validate_pan_format
-        valid, _ = validate_pan_format("aabcu9603r")
-        assert valid is False
+        valid, error = validate_pan_format("aabcu9603r")
+        assert valid is True and error is None
 
 
 class TestTDSCalculation:
@@ -243,6 +257,27 @@ class TestTDSCalculation:
         tds_base = Decimal("11800.00") - Decimal("1800.00")
         tds = tds_base * Decimal("1.00") / 100
         assert tds_base == Decimal("10000.00") and tds == Decimal("100.00")
+
+    def test_three_way_tds_flags_deposit_and_return_mismatches(self):
+        from app.services.vendor_compliance.tds_checks import three_way_tds_reconciliation
+        result = three_way_tds_reconciliation(Decimal("100"), Decimal("80"), Decimal("75"))
+        assert {issue["type"] for issue in result["issues"]} == {"deposit_mismatch", "reporting_mismatch"}
+
+
+class TestITCPaymentDeadline:
+    def test_partial_payment_after_180_days_keeps_unpaid_balance_at_risk(self):
+        from app.services.vendor_compliance.gst_checks import check_itc_180_day_rule
+        status, message = check_itc_180_day_rule(
+            date(2026, 1, 1), None, Decimal("500"), Decimal("1000"), date(2026, 7, 10)
+        )
+        assert status == "reversal_required" and "unpaid consideration" in message.lower()
+
+    def test_partial_payment_before_180_days_is_pending(self):
+        from app.services.vendor_compliance.gst_checks import check_itc_180_day_rule
+        status, message = check_itc_180_day_rule(
+            date(2026, 1, 1), None, Decimal("500"), Decimal("1000"), date(2026, 2, 1)
+        )
+        assert status == "pending" and "partially paid" in message
 
 
 class TestMSMEPaymentDeadline:
@@ -257,6 +292,15 @@ class TestMSMEPaymentDeadline:
     def test_exactly_45(self):
         days = (date(2026, 10, 16) - date(2026, 9, 1)).days
         assert days == 45
+
+    def test_partial_payment_does_not_close_deadline(self):
+        from app.services.vendor_compliance.msme_checks import check_msme_payment_deadline
+        result = check_msme_payment_deadline(
+            invoice_date=date(2026, 1, 1), acceptance_date=None, payment_date=None,
+            msme_type="small", udyam_number="UDYAM-KA-07-0001234", is_msme_verified=True,
+            paid_amount=Decimal("500"), invoice_amount=Decimal("1000"), as_of_date=date(2026, 3, 1),
+        )
+        assert result["status"] == "breach" and result["is_flagged"]
 
 
 class TestSavingsScenario:

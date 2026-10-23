@@ -100,6 +100,7 @@ FinOps-AI/
 | `/analytics` | **Analytics** | Fee trends, volume by gateway, effective rate charts |
 | `/pricing` | **Pricing** | Gateway pricing models, fee-rate comparison |
 | `/reports` | **Reports** | Generate & download reconciliation and exception reports |
+| `/vendor-compliance` | **Vendor Compliance** | Vendor checks, scorecards, exceptions, master cleanup, and reviewed tax rules |
 
 ---
 
@@ -197,6 +198,12 @@ pip install -r requirements.txt
 alembic upgrade head
 ```
 
+The current migration head includes the initial payment/vendor schema and a
+follow-up migration allowing versioned tax rules. For a clean PostgreSQL
+database, create an empty database and run `alembic upgrade head` before starting
+the API. The supplied workbooks can then be imported through the Uploads page or
+with `python scripts/import_all.py` from `backend/`.
+
 ### 4. Start the Backend
 
 ```bash
@@ -250,6 +257,23 @@ All endpoints are prefixed with `/api/v1`. Interactive docs at `/api/docs` when 
 | `GET` | `/api/v1/pricing/` | List gateway pricing models |
 | `GET` | `/api/v1/reports/` | List available reports |
 | `POST` | `/api/v1/reports/generate` | Generate a report |
+| `GET` | `/api/v1/reports/executive-summary` | One-page printable summary from persisted records |
+| `POST` | `/api/v1/vendor-compliance/seed` | Load the clearly labeled synthetic vendor demo records |
+| `POST` | `/api/v1/vendor-compliance/checks/run` | Assess all vendors or pass `vendor_id` |
+| `GET` | `/api/v1/vendor-compliance/scorecards` | List calculated vendor scorecards |
+| `GET` | `/api/v1/vendor-compliance/exceptions` | List vendor exceptions with missing evidence |
+| `POST` | `/api/v1/vendor-compliance/master-cleanup/scan` | Detect vendor master quality issues |
+| `GET/POST` | `/api/v1/vendor-compliance/tax-rules` | Maintain dated tax rule versions; new rules start pending review |
+| `POST` | `/api/v1/vendor-compliance/tax-rules/{id}/approve` | Record explicit tax-rule approval |
+
+Vendor Compliance setup: after migrations, open `/vendor-compliance`, choose
+**Load synthetic demo data**, then **Run compliance checks**. Master-data cleanup
+is a separate scan. Synthetic records are not real supplier evidence. Only
+approved, effective tax rules are used for rate-based TDS checks; missing or
+unverified evidence remains visible as an exception.
+
+See [accuracy-report.md](accuracy-report.md) for verified workbook row counts,
+retry behavior, measurement assumptions, and remaining evidence limits.
 
 ---
 
@@ -265,6 +289,7 @@ All endpoints are prefixed with `/api/v1`. Interactive docs at `/api/docs` when 
 | `MAX_UPLOAD_SIZE_MB` | `50` | Maximum file upload size |
 | `MAX_ROWS_PER_IMPORT` | `100000` | Maximum rows per imported dataset |
 | `AI_ENABLED` | `false` | Enable LLM-powered insights |
+| `AI_RETENTION_APPROVED` | `false` | Explicitly confirms provider and data-retention settings are approved |
 | `AI_PROVIDER` | `openai` | `openai`, `anthropic`, or `google` |
 | `OPENAI_API_KEY` | — | Required when `AI_PROVIDER=openai` |
 | `ANTHROPIC_API_KEY` | — | Required when `AI_PROVIDER=anthropic` |
@@ -282,6 +307,9 @@ All endpoints are prefixed with `/api/v1`. Interactive docs at `/api/docs` when 
 - **Schemas** (`app/schemas/`) are Pydantic v2 models, strictly separate from ORM models
 - **All monetary arithmetic** uses Python `Decimal`, never `float`
 - **Background imports** are handled by Celery tasks, not inline in HTTP request handlers
+- **Observed fees** are calculated from imported gateway records. Pricing rules and savings scenarios are configurable estimates and are not verified contract rates.
+- **Compliance rules** require a source reference, version, effective dates, and explicit approval before rate-based checks use them. Legal rates and section mappings are not inferred by the application.
+- External AI requests stay disabled unless `AI_ENABLED=true`, a supported provider key is present, and `AI_RETENTION_APPROVED=true`.
 
 ### Running Tests
 

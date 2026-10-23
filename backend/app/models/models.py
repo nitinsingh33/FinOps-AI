@@ -23,16 +23,19 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+
+json_type = JSON().with_variant(JSONB, "postgresql")
 
 
 def gen_uuid() -> str:
@@ -118,7 +121,7 @@ class UploadedDataset(Base):
     file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=True)
-    upload_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    upload_metadata: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -205,8 +208,8 @@ class SourceRecord(Base):
     dataset_type: Mapped[str] = mapped_column(String(50), nullable=False)
     source_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
     source_identifier: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    raw_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    import_warnings: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    raw_data: Mapped[dict] = mapped_column(json_type, nullable=False)
+    import_warnings: Mapped[Optional[list]] = mapped_column(json_type, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -246,7 +249,7 @@ class Payment(Base):
     card_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     error_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     transacted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    gateway_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    gateway_metadata: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -302,7 +305,7 @@ class GatewayTransaction(Base):
     transacted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     settled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     available_on: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    gateway_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    gateway_metadata: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -332,7 +335,7 @@ class Refund(Base):
     currency: Mapped[str] = mapped_column(String(10), nullable=False)
     arn: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     refunded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    gateway_metadata: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    gateway_metadata: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -380,14 +383,14 @@ class ReconciliationRun(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default=ReconciliationStatus.PENDING)
     triggered_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    dataset_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    dataset_ids: Mapped[Optional[list]] = mapped_column(json_type, nullable=True)
     rule_version: Mapped[str] = mapped_column(String(50), nullable=False, default="1.0")
     total_records: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     matched_records: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     unmatched_records: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     ambiguous_records: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     exception_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    summary: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    summary: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -412,7 +415,7 @@ class ReconciliationMatch(Base):
     confidence: Mapped[str] = mapped_column(String(20), nullable=False)
     payment_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     gateway_txn_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    match_evidence: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    match_evidence: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     amount_difference: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     currency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -438,7 +441,7 @@ class ReconciliationException(Base):
     expected_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     observed_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    evidence: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    evidence: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     # Source record links
     source_payment_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     source_txn_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -528,7 +531,7 @@ class SavingsScenario(Base):
     current_estimated_fee: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     alternative_estimated_fee: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     estimated_difference: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
-    assumptions: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    assumptions: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     limitations: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_estimate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -553,12 +556,12 @@ class AIInvestigation(Base):
     is_ai_generated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     evidence_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    verified_facts: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    possible_explanations: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    missing_information: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    recommended_steps: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    verified_facts: Mapped[Optional[list]] = mapped_column(json_type, nullable=True)
+    possible_explanations: Mapped[Optional[list]] = mapped_column(json_type, nullable=True)
+    missing_information: Mapped[Optional[list]] = mapped_column(json_type, nullable=True)
+    recommended_steps: Mapped[Optional[list]] = mapped_column(json_type, nullable=True)
     confidence_assessment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    raw_response: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    raw_response: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     tokens_used: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="completed")
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -605,7 +608,7 @@ class AuditEvent(Base):
     entity_type: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(255), nullable=False)
     actor: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    payload: Mapped[Optional[dict]] = mapped_column(json_type, nullable=True)
     request_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

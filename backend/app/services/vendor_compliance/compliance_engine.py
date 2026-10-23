@@ -43,8 +43,7 @@ from app.services.vendor_compliance.gst_checks import (
 )
 from app.services.vendor_compliance.tds_checks import (
     compute_tds_base, compute_expected_tds, validate_tds_deduction,
-    three_way_tds_reconciliation, check_foreign_vendor_requirements,
-    get_applicable_tds_rule,
+    three_way_tds_reconciliation,
 )
 from app.services.vendor_compliance.msme_checks import (
     check_msme_payment_deadline, validate_msme_udyam_format,
@@ -336,8 +335,9 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                     "paid_amount": str(paid_total),
                     "invoice_amount": str(inv.total_amount),
                 },
-                amount_at_stake=(inv.total_tax_amount * max(inv.total_amount - paid_total, Decimal("0")) / inv.total_amount
-                                 if inv.total_amount else inv.total_tax_amount),
+                amount_at_stake=(inv.total_tax_amount if full_payment_date else
+                    inv.total_tax_amount * max(inv.total_amount - paid_total, Decimal("0")) / inv.total_amount
+                    if inv.total_amount else inv.total_tax_amount),
             )
             exceptions.append(exc)
             risk_score += SCORE_WEIGHTS["high"]
@@ -348,6 +348,7 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                 TaxRule.tax_category == "tds",
                 TaxRule.section_1961 == inv.tds_section,
                 TaxRule.verification_status == "approved",
+                TaxRule.is_sample_rule.is_(False),
                 TaxRule.effective_from <= inv.invoice_date,
             ).all()
             active_rules = [r for r in active_rules if r.effective_to is None or r.effective_to >= inv.invoice_date]
@@ -409,28 +410,16 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                 exceptions.append(exc)
                 risk_score += SCORE_WEIGHTS["medium"]
 
-            # Foreign vendor TDS check
-            if vendor.vendor_type == "foreign":
-                fv_issues = check_foreign_vendor_requirements(
-                    vendor.vendor_type,
-                    inv.has_form_15ca_15cb,
-                    inv.tds_section,
-                    inv.total_amount,
-                )
-                for issue in fv_issues:
-                    exc = _add_exception(
-                        db, vendor_id,
-                        check_code=f"TDS_FOREIGN_{issue['type'].upper()}",
-                        category="tds",
-                        severity=issue["severity"],
-                        title=f"Foreign vendor compliance issue on invoice {inv.invoice_number}",
-                        description=issue["description"],
-                        suggested_action="Engage tax consultant for cross-border payment compliance.",
-                        invoice_id=inv.id,
-                        evidence={"invoice_number": inv.invoice_number},
-                    )
-                    exceptions.append(exc)
-                    risk_score += SCORE_WEIGHTS[issue["severity"]]
+        if vendor.vendor_type == "foreign" and not inv.has_form_15ca_15cb:
+            exc = _add_exception(db, vendor_id, "TDS_FOREIGN_DOCUMENTATION_UNCONFIRMED", "tds", "medium",
+                f"Cross-border payment documentation is not recorded for invoice {inv.invoice_number}",
+                "Required documents and tax treatment depend on the facts and applicable rules; no threshold or section mapping was assumed.",
+                "Have the tax team determine applicable documentation and record evidence.",
+                invoice_id=inv.id,
+                missing_information=["Tax-team determination and supporting cross-border payment documents"],
+                evidence={"invoice_number": inv.invoice_number, "payment_amount": str(inv.total_amount)})
+            exceptions.append(exc)
+            risk_score += SCORE_WEIGHTS["medium"]
 
         # MSME check per invoice
         if vendor.msme_type != "non_msme":
@@ -476,7 +465,8 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                         "udyam_number": vendor.udyam_number,
                     },
                     missing_information=msme_result.get("missing_evidence"),
-                    amount_at_stake=max(inv.total_amount - paid_msme, Decimal("0")),
+                    amount_at_stake=(max(inv.total_amount - paid_msme, Decimal("0"))
+                                     if paid_msme < inv.total_amount else inv.total_amount),
                 )
                 exceptions.append(exc)
                 risk_score += SCORE_WEIGHTS["high"]

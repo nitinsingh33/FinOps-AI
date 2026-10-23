@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 import uuid
@@ -124,6 +125,15 @@ def scan_vendor_master(db: Session = Depends(get_db)):
                 severity="high" if issue in ("invalid_pan", "invalid_gstin", "pan_gstin_mismatch") else "medium",
                 field_name=field, description=description, recommended_fix=fix, status="open")
             db.add(item); findings.append(item)
+        if v.pan:
+            duplicate = db.query(VendorMaster).filter(VendorMaster.id != v.id, VendorMaster.pan == v.pan).order_by(VendorMaster.id).first()
+            if duplicate and v.id < duplicate.id:
+                item = VendorMasterCleanupItem(id=str(uuid.uuid4()), vendor_id=v.id,
+                    duplicate_candidate_vendor_id=duplicate.id, issue_type="duplicate_pan_candidate",
+                    severity="medium", field_name="pan",
+                    description="Another vendor record has the same PAN. This is a duplicate candidate, not a verified duplicate.",
+                    recommended_fix="Review legal entity documents and vendor ownership before merging.", status="open")
+                db.add(item); findings.append(item)
     db.commit()
     return [{"id": x.id, "vendor_id": x.vendor_id, "issue_type": x.issue_type,
              "severity": x.severity, "field_name": x.field_name, "description": x.description,
@@ -169,10 +179,36 @@ def list_tax_rules(db: Session = Depends(get_db)):
 
 @router.post("/tax-rules")
 def create_tax_rule(body: TaxRuleCreate, db: Session = Depends(get_db)):
-    if db.query(TaxRule).filter_by(rule_code=body.rule_code).first():
-        raise HTTPException(status_code=409, detail="rule_code already exists; create a new versioned rule code")
+    if body.tax_category not in ("gst", "tds"):
+        raise HTTPException(status_code=422, detail="tax_category must be gst or tds")
+    if not body.source_reference or not body.source_reference.strip():
+        raise HTTPException(status_code=422, detail="source_reference is required for review")
+    if db.query(TaxRule).filter_by(rule_code=body.rule_code, version=body.version).first():
+        raise HTTPException(status_code=409, detail="This rule code and version already exists")
     rule = TaxRule(id=str(uuid.uuid4()), **body.model_dump(), verification_status=RuleApprovalStatus.PENDING_REVIEW,
                    is_sample_rule=False)
     db.add(rule); db.commit(); db.refresh(rule)
     return {"id": rule.id, "rule_code": rule.rule_code, "verification_status": rule.verification_status,
             "version": rule.version, "effective_from": rule.effective_from.isoformat()}
+
+
+class RuleApproval(BaseModel):
+    approved_by: str
+
+
+@router.post("/tax-rules/{rule_id}/approve")
+def approve_tax_rule(rule_id: str, body: RuleApproval, db: Session = Depends(get_db)):
+    rule = db.query(TaxRule).filter_by(id=rule_id).first()
+    if not rule:
+        raise HTTPException(status_code=404, detail="Tax rule not found")
+    if not body.approved_by.strip():
+        raise HTTPException(status_code=422, detail="approved_by is required")
+    if rule.is_sample_rule:
+        raise HTTPException(status_code=409, detail="Synthetic sample rules cannot be activated. Create a reviewed non-sample version with an authoritative source.")
+    rule.verification_status = RuleApprovalStatus.APPROVED
+    rule.approved_by = body.approved_by.strip()
+    rule.approved_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"id": rule.id, "rule_code": rule.rule_code, "version": rule.version,
+            "verification_status": rule.verification_status, "approved_by": rule.approved_by,
+            "approved_at": rule.approved_at.isoformat()}

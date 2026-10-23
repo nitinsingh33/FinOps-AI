@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,6 +29,8 @@ class PricingRuleCreate(BaseModel):
     tax_on_fee_pct: Optional[float] = None
     min_fee: Optional[float] = None
     max_fee: Optional[float] = None
+    effective_from: Optional[datetime] = None
+    effective_to: Optional[datetime] = None
     notes: Optional[str] = None
     is_illustrative: bool = True
 
@@ -64,6 +67,10 @@ def create_pricing_rule(body: PricingRuleCreate, db: Session = Depends(get_db)):
         fixed_fee=Decimal(str(body.fixed_fee)) if body.fixed_fee is not None else None,
         fixed_fee_currency=body.fixed_fee_currency,
         tax_on_fee_pct=Decimal(str(body.tax_on_fee_pct)) if body.tax_on_fee_pct is not None else None,
+        min_fee=Decimal(str(body.min_fee)) if body.min_fee is not None else None,
+        max_fee=Decimal(str(body.max_fee)) if body.max_fee is not None else None,
+        effective_from=body.effective_from,
+        effective_to=body.effective_to,
         notes=body.notes,
         is_illustrative=body.is_illustrative,
     )
@@ -99,22 +106,47 @@ def create_savings_scenario(body: SavingsScenarioCreate, db: Session = Depends(g
         alt_rule = db.query(PricingRule).filter_by(id=body.alternative_pricing_rule_id).first()
 
     volume = Decimal(str(body.eligible_volume))
-    current_fee = _estimate_fee(volume, current_rule)
-    alt_fee = _estimate_fee(volume, alt_rule)
+    limitations = []
+    scenario_time = datetime.now(timezone.utc)
+
+    def matches(rule: Optional[PricingRule], gateway_name: str, label: str) -> bool:
+        if rule is None:
+            limitations.append(f"No {label} gateway pricing rule selected — fee is not estimated.")
+            return False
+        if rule.gateway != gateway_name:
+            limitations.append(f"{label.title()} rule gateway does not match the selected gateway.")
+            return False
+        if rule.currency and rule.currency != body.currency:
+            limitations.append(f"{label.title()} rule currency {rule.currency} does not match scenario currency {body.currency}.")
+            return False
+        if rule.payment_method and body.payment_method and rule.payment_method != body.payment_method:
+            limitations.append(f"{label.title()} rule payment method does not match the scenario.")
+            return False
+        if rule.country and body.country and rule.country != body.country:
+            limitations.append(f"{label.title()} rule country does not match the scenario.")
+            return False
+        if rule.fixed_fee is not None and rule.fixed_fee_currency and rule.fixed_fee_currency != body.currency:
+            limitations.append(f"{label.title()} fixed fee currency does not match scenario currency.")
+            return False
+        if rule.effective_from and rule.effective_from.date() > scenario_time.date():
+            limitations.append(f"{label.title()} pricing rule is not yet effective.")
+            return False
+        if rule.effective_to and rule.effective_to.date() < scenario_time.date():
+            limitations.append(f"{label.title()} pricing rule has expired.")
+            return False
+        return True
+
+    current_fee = _estimate_fee(volume, current_rule) if matches(current_rule, body.current_gateway, "current") else None
+    alt_fee = _estimate_fee(volume, alt_rule) if matches(alt_rule, body.alternative_gateway, "alternative") else None
     difference = current_fee - alt_fee if (current_fee is not None and alt_fee is not None) else None
 
-    limitations = []
-    if current_rule is None:
-        limitations.append("No current gateway pricing rule selected — current fee is not estimated.")
-    elif current_rule.is_illustrative:
+    if current_rule and current_rule.is_illustrative:
         limitations.append("Current pricing rule is illustrative — not a verified contract rate.")
-    else:
+    elif current_rule:
         limitations.append("Current pricing input is not independently verified against a signed contract.")
-    if alt_rule is None:
-        limitations.append("No alternative gateway pricing rule selected — alternative fee is not estimated.")
-    elif alt_rule.is_illustrative:
+    if alt_rule and alt_rule.is_illustrative:
         limitations.append("Alternative pricing rule is illustrative — not a verified contract rate.")
-    else:
+    elif alt_rule:
         limitations.append("Alternative pricing input is not independently verified against a signed contract.")
 
     scenario = SavingsScenario(
@@ -213,4 +245,6 @@ def _format_rule(rule: Optional[PricingRule]) -> Optional[dict]:
         "evidence_status": "illustrative" if rule.is_illustrative else "unverified_input",
         "notes": rule.notes,
         "created_at": rule.created_at.isoformat(),
+        "effective_from": rule.effective_from.isoformat() if rule.effective_from else None,
+        "effective_to": rule.effective_to.isoformat() if rule.effective_to else None,
     }

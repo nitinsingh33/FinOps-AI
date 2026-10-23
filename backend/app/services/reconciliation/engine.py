@@ -133,9 +133,13 @@ def reconcile_gwa(db: Session, ctx: ReconciliationContext) -> None:
 
     # Index transactions by their entity_id (which is the payment ID for payment-type txns)
     txn_by_payment_id: Dict[str, GatewayTransaction] = {}
+    txn_by_order_id: Dict[str, List[GatewayTransaction]] = {}
     for txn in txns:
-        if txn.gateway_txn_id:  # entity_id is stored as gateway_txn_id
-            txn_by_payment_id[txn.gateway_txn_id] = txn
+        for candidate_id in (txn.gateway_payment_id, txn.gateway_txn_id):
+            if candidate_id:
+                txn_by_payment_id[candidate_id] = txn
+        if txn.gateway_order_id:
+            txn_by_order_id.setdefault(txn.gateway_order_id, []).append(txn)
 
     # Index refunds by payment_id
     refund_by_payment_id: Dict[str, List[Refund]] = {}
@@ -150,13 +154,29 @@ def reconcile_gwa(db: Session, ctx: ReconciliationContext) -> None:
 
         # --- Step 1: Match payment → transaction by payment ID ---
         matched_txn = txn_by_payment_id.get(pid)
+        match_method = MatchMethod.EXACT_ID
+        match_confidence = MatchConfidence.HIGH
+        if matched_txn is None and payment.gateway_order_id:
+            order_candidates = [t for t in txn_by_order_id.get(payment.gateway_order_id, [])
+                                if t.id not in ctx.matched_txn_ids]
+            if len(order_candidates) == 1:
+                matched_txn = order_candidates[0]
+                match_method = MatchMethod.ORDER_ID
+                match_confidence = MatchConfidence.MEDIUM
+            elif len(order_candidates) > 1:
+                _add_exception(ctx, ctx.run_id, ExceptionCategory.AMBIGUOUS_MATCH, "gateway_a",
+                    f"Order {payment.gateway_order_id} maps to multiple payment transactions; no transaction was selected.",
+                    currency=payment.currency, amount_at_stake=payment.gross_amount,
+                    evidence={"payment_id": pid, "order_id": payment.gateway_order_id,
+                              "candidate_count": len(order_candidates)},
+                    source_payment_id=pid, severity="medium")
 
         if matched_txn:
             ctx.matched_payment_ids.add(payment.id)
             ctx.matched_txn_ids.add(matched_txn.id)
 
             evidence = {
-                "match_method": MatchMethod.EXACT_ID,
+                "match_method": match_method,
                 "payment_id": pid,
                 "payment_gross": str(payment.gross_amount),
                 "payment_currency": payment.currency,
@@ -172,8 +192,8 @@ def reconcile_gwa(db: Session, ctx: ReconciliationContext) -> None:
             ctx.matched.append({
                 "id": str(uuid.uuid4()),
                 "run_id": ctx.run_id,
-                "match_method": MatchMethod.EXACT_ID,
-                "confidence": MatchConfidence.HIGH,
+                "match_method": match_method,
+                "confidence": match_confidence,
                 "payment_id": pid,
                 "gateway_txn_id": matched_txn.gateway_txn_id,
                 "match_evidence": evidence,
@@ -480,11 +500,17 @@ def run_reconciliation(db: Session, run_id: str) -> ReconciliationRun:
         exception_summary[e["category"]] = exception_summary.get(e["category"], 0) + 1
 
     # Amounts at stake by currency (only where currency is set)
-    amounts_by_currency: Dict[str, Decimal] = {}
+    exposure_by_source: Dict[Tuple[str, str], Decimal] = {}
     for e in ctx.exceptions:
         if e.get("currency") and e.get("amount_at_stake"):
             curr = e["currency"]
-            amounts_by_currency[curr] = amounts_by_currency.get(curr, Decimal(0)) + e["amount_at_stake"]
+            source = (e.get("source_payment_id") or e.get("source_refund_id")
+                      or e.get("source_txn_id") or e["id"])
+            key = (curr, source)
+            exposure_by_source[key] = max(exposure_by_source.get(key, Decimal("0")), e["amount_at_stake"])
+    amounts_by_currency: Dict[str, Decimal] = {}
+    for (curr, _), amount in exposure_by_source.items():
+        amounts_by_currency[curr] = amounts_by_currency.get(curr, Decimal("0")) + amount
 
     # Load totals
     total_payments = db.query(Payment).filter_by(gateway="gateway_a").count()

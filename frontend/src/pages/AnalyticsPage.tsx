@@ -213,6 +213,18 @@ export default function AnalyticsPage() {
       )}
 
       {/* Gateway B payout summary */}
+      {gwaSettlement.length > 0 && (
+        <div className="card mb-8">
+          <div className="card-header"><span className="card-title">Gateway A — Settlement Entries</span></div>
+          <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
+            <table className="data-table"><thead><tr><th>Entry Type</th><th>Currency</th><th>Settlement Records</th><th>Observed Credit</th></tr></thead>
+              <tbody>{gwaSettlement.map((s: { transaction_type: string; currency: string; settlement_records: number; observed_credit: number }, i: number) => <tr key={i}>
+                <td>{s.transaction_type.replace(/_/g, ' ')}</td><td>{s.currency}</td><td>{s.settlement_records.toLocaleString('en-IN')}</td><td>{s.currency} {s.observed_credit.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+              </tr>)}</tbody>
+            </table>
+          </div>
+        </div>
+      )}
       {gwbPayouts.length > 0 && (
         <div className="card">
           <div className="card-header">
@@ -226,20 +238,23 @@ export default function AnalyticsPage() {
               <thead>
                 <tr>
                   <th>Payout ID</th>
-                  <th>Charge Count</th>
-                  <th>Total Net</th>
+                  <th>Currency</th>
+                  <th>Charges / Balance Rows</th>
+                  <th>Observed Net</th>
                 </tr>
               </thead>
               <tbody>
-                {gwbPayouts.map((p: { payout_id: string; charge_count: number; total_net: number }) => (
-                  <tr key={p.payout_id}>
+                {gwbPayouts.map((p: { payout_id: string; currency: string; charge_count: number; balance_record_count: number; total_net: number }) => (
+                  <tr key={`${p.payout_id}-${p.currency}`}>
                     <td className="td-mono">{p.payout_id}</td>
-                    <td>{p.charge_count}</td>
-                    <td className="td-amount">{p.total_net?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td>{p.currency}</td>
+                    <td>{p.charge_count} / {p.balance_record_count}</td>
+                    <td className="td-amount">{p.currency} {p.total_net?.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            <p className="text-sm text-muted" style={{ padding: 12 }}>{settlData?.gateway_b_payout_summary?.amount_basis}</p>
           </div>
         </div>
       )}

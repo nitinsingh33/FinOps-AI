@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.models import (
     ImportJob, ImportRowError, ImportStatus, Payment, GatewayTransaction,
-    Refund, SourceRecord, UploadedDataset,
+    Refund, Settlement, SourceRecord, UploadedDataset,
 )
 from app.services.adapters.excel_adapters import parse_dataset
 
@@ -263,11 +263,18 @@ def _persist_normalized(db: Session, source_record_id: str, rec: Dict[str, Any])
             currency=rec["currency"],
             is_settled=rec.get("is_settled"),
             card_network=rec.get("card_network"),
-            card_type=rec.get("card_type"),
             transacted_at=rec.get("transacted_at"),
             settled_at=rec.get("settled_at"),
             gateway_metadata=rec.get("gateway_metadata"),
         ))
+        if rec.get("txn_type") in {"settlement", "offer_settlement"} and rec.get("settlement_id"):
+            _accumulate_settlement(db, "gateway_a", rec["settlement_id"], rec["currency"],
+                rec.get("gross_amount"), rec.get("fee"), rec.get("tax"),
+                rec.get("credit_amount"), rec.get("settled_at"), rec.get("settlement_utr"))
+        elif rec.get("txn_type") == "settlement":
+            _accumulate_settlement(db, "gateway_a", rec["gateway_txn_id"], rec["currency"],
+                rec.get("gross_amount"), rec.get("fee"), rec.get("tax"),
+                rec.get("credit_amount"), rec.get("settled_at"), rec.get("settlement_utr"))
 
     elif dtype == "gwa_refunds":
         db.add(Refund(
@@ -309,3 +316,45 @@ def _persist_normalized(db: Session, source_record_id: str, rec: Dict[str, Any])
             available_on=rec.get("available_on"),
             gateway_metadata=rec.get("gateway_metadata"),
         ))
+        if rec.get("payout_id"):
+            # Gateway B exports balance rows associated with a payout, not a
+            # separate authoritative payout amount. Store the currency-scoped
+            # sum of those observed rows, clearly labeled by their source ID.
+            _accumulate_settlement(db, "gateway_b", rec["payout_id"], rec["currency"],
+                rec.get("gross_amount"), rec.get("fee"), rec.get("tax"),
+                rec.get("net_amount"), rec.get("settled_at"), None)
+
+
+def _accumulate_settlement(
+    db: Session,
+    gateway: str,
+    settlement_id: str,
+    currency: str,
+    gross: Optional[Any],
+    fee: Optional[Any],
+    tax: Optional[Any],
+    net: Optional[Any],
+    settled_at: Optional[datetime],
+    utr: Optional[str],
+) -> None:
+    """Accumulate settlement-linked amounts by gateway ID and currency."""
+    scoped_id = f"{settlement_id}:{currency}"
+    row = db.query(Settlement).filter_by(gateway=gateway, gateway_settlement_id=scoped_id).first()
+    if row is None:
+        row = Settlement(gateway=gateway, gateway_settlement_id=scoped_id, currency=currency,
+                         settlement_utr=utr, gross_amount=None, fee=None, tax=None, net_amount=None)
+        db.add(row)
+    for field, amount in (("gross_amount", gross), ("fee", fee), ("tax", tax), ("net_amount", net)):
+        if amount is not None:
+            setattr(row, field, (getattr(row, field) or 0) + amount)
+    if settled_at:
+        existing_settled_at = row.settled_at
+        if existing_settled_at is None:
+            row.settled_at = settled_at
+        else:
+            # SQLite returns timezone-aware DateTime values as naive while
+            # PostgreSQL preserves the timezone. Compare both as UTC instants.
+            incoming_utc = settled_at.replace(tzinfo=timezone.utc) if settled_at.tzinfo is None else settled_at.astimezone(timezone.utc)
+            existing_utc = existing_settled_at.replace(tzinfo=timezone.utc) if existing_settled_at.tzinfo is None else existing_settled_at.astimezone(timezone.utc)
+            if incoming_utc > existing_utc:
+                row.settled_at = settled_at

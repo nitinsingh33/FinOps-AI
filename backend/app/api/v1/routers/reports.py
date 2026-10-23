@@ -8,7 +8,7 @@ from html import escape
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.responses import Response, StreamingResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -129,8 +129,8 @@ def download_payments_csv(
 
     output.seek(0)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return StreamingResponse(
-        iter([output.getvalue()]),
+    return Response(
+        content=output.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="payments_{timestamp}.csv"'},
     )

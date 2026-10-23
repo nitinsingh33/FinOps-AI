@@ -89,7 +89,7 @@ class TaxRule(Base):
     __tablename__ = "tax_rules"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
-    rule_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    rule_code: Mapped[str] = mapped_column(String(50), nullable=False)
     tax_category: Mapped[str] = mapped_column(String(20), nullable=False)  # 'tds' or 'gst'
     section_1961: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # e.g. "194C"
     section_2025: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # e.g. "Clause 212 / ITA 2025"
@@ -116,6 +116,7 @@ class TaxRule(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("rule_code", "version", name="uq_tax_rule_code_version"),
         Index("ix_tax_rules_category", "tax_category"),
         Index("ix_tax_rules_code", "rule_code"),
     )
