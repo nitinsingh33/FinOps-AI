@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from app.models.models import (
 from app.models.vendor_compliance import VendorComplianceException, VendorMaster, VendorScorecard
 from app.services.import_service import compute_sha256, register_dataset, create_import_job, run_import_job
 from app.services.reconciliation.engine import run_reconciliation
-from app.services.analytics_service import get_gateway_cost_analysis
+from app.services.analytics_service import get_gateway_cost_analysis, get_settlement_analysis
 from app.services.vendor_compliance.synthetic_data import seed_vendor_compliance_data
 from app.services.vendor_compliance.compliance_engine import run_vendor_compliance_checks
 from app.api.v1.routers.reports import download_payments_csv, executive_summary
@@ -90,6 +91,66 @@ def test_four_workbook_imports_and_retry_are_idempotent(db):
     assert all(row["transaction_count"] > 0 for row in monthly)
     assert all(row["gross_volume"] >= 0 and row["observed_fees"] >= 0 for row in monthly)
     assert {row["gateway"] for row in monthly}.issubset({"gateway_a", "gateway_b"})
+    assert all("observed_tax" in row and "fee_records_missing_amount" in row for row in monthly)
+    assert all(
+        row["observed_cost"] is None or row["fee_currency"] == row["tax_currency"]
+        for row in monthly
+    )
+    settlement_data = get_settlement_analysis(db)
+    settlement_metrics = settlement_data["monthly_settlement_metrics"]
+    assert settlement_metrics
+    assert {row["gateway"] for row in settlement_metrics} == {"gateway_a", "gateway_b"}
+    assert all(row["timed_rows"] <= row["source_rows"] for row in settlement_metrics)
+    assert all(row["median_hours"] is None or row["median_hours"] >= 0 for row in settlement_metrics)
+    assert any(row["timing_basis"] == "balance available_on" for row in settlement_metrics)
+    assert any(row["timing_basis"] == "payout effective timestamp" for row in settlement_metrics)
+    assert "not independently verified bank receipt" in settlement_data["timing_data_note"]
+
+    # Missing amounts stay visibly missing, and invalid negative settlement
+    # durations do not enter monthly latency averages.
+    captured = db.query(Payment).filter_by(gateway="gateway_a", status="captured").first()
+    captured.fee = None
+    captured.tax = None
+    captured.tax_currency = None
+    db.flush()
+    affected = next(row for row in get_gateway_cost_analysis(db)["monthly_breakdowns"]
+                    if row["gateway"] == "gateway_a" and row["currency"] == captured.currency
+                    and row["tax_currency"] == "UNKNOWN"
+                    and row["month"] == captured.transacted_at.strftime("%Y-%m"))
+    assert affected["fee_records_missing_amount"] >= 1
+    assert affected["tax_records_missing_amount"] >= 1
+    assert affected["observed_cost"] is None
+    assert affected["observed_cost_unavailable_reason"] == "currency_mismatch"
+
+    gwa_payment_txns = db.query(GatewayTransaction).filter(
+        GatewayTransaction.gateway == "gateway_a",
+        GatewayTransaction.txn_type == "payment",
+        GatewayTransaction.transacted_at.is_not(None),
+    ).order_by(GatewayTransaction.id).limit(3).all()
+    assert len(gwa_payment_txns) == 3
+    missing_time_txn, negative_time_txn, conflicting_time_txn = gwa_payment_txns
+    missing_time_txn.settled_at = None
+    negative_time_txn.settled_at = negative_time_txn.transacted_at - timedelta(minutes=1)
+    negative_time_txn.is_settled = True
+    conflicting_time_txn.settled_at = conflicting_time_txn.transacted_at + timedelta(hours=1)
+    conflicting_time_txn.is_settled = False
+    db.flush()
+    updated_metrics = get_settlement_analysis(db)["monthly_settlement_metrics"]
+    missing_group = next(row for row in updated_metrics
+                         if row["gateway"] == "gateway_a" and row["currency"] == missing_time_txn.currency
+                         and row["month"] == missing_time_txn.transacted_at.strftime("%Y-%m")
+                         and row["timing_basis"] == "transaction settled_at")
+    assert missing_group["missing_completion_time"] >= 1
+    negative_group = next(row for row in updated_metrics
+                          if row["gateway"] == "gateway_a" and row["currency"] == negative_time_txn.currency
+                          and row["month"] == negative_time_txn.transacted_at.strftime("%Y-%m")
+                          and row["timing_basis"] == "transaction settled_at")
+    assert negative_group["invalid_negative_duration"] >= 1
+    conflict_group = next(row for row in updated_metrics
+                          if row["gateway"] == "gateway_a" and row["currency"] == conflicting_time_txn.currency
+                          and row["month"] == conflicting_time_txn.transacted_at.strftime("%Y-%m")
+                          and row["timing_basis"] == "transaction settled_at")
+    assert conflict_group["completion_time_unsettled_conflict"] >= 1
 
     for dataset_type, filename in WORKBOOKS:
         path = ROOT / "data" / filename
@@ -129,8 +190,10 @@ def test_reconciliation_and_csv_export_use_imported_records(db):
     assert db.query(Payment).first().gateway_payment_id in body
     page = executive_summary(db=db).body.decode("utf-8")
     assert "Executive Summary" in page
-    assert "Observed transaction volume" in page
-    assert "contractual rates have not been independently verified" in page
+    assert "Observed monthly cost" in page
+    assert "Settlement timing" in page
+    assert "Reconciliation and exceptions" in page
+    assert "contract" in page.lower()
 
 
 def test_partial_refunds_are_aggregated_by_currency_and_ignore_failed_refunds(db):
@@ -179,8 +242,11 @@ def test_pricing_scenario_rejects_currency_mismatch(db):
     ), db=db)
     assert result["current_estimated_fee"] is not None
     assert result["alternative_estimated_fee"] is None
+    assert result["reliable_recommendation"] is False
+    assert result["recommendation_status"] == "unavailable"
     assert any("currency" in item.lower() for item in result["limitations"])
     assert any("not independently verified" in item for item in result["limitations"])
+    assert any("fixed-fee basis" in item for item in result["limitations"])
 
 
 def test_pricing_scenario_requires_rule_country_and_method_context(db):
@@ -213,6 +279,12 @@ def test_pricing_scenario_requires_rule_country_and_method_context(db):
         current_pricing_rule_id=current.id, alternative_pricing_rule_id=alternative.id,
     ), db=db)
     assert specified_context["current_estimated_fee"] is not None
+    assert specified_context["alternative_estimated_fee"] is not None
+    assert specified_context["estimated_lower_cost_gateway"] == "gateway_b"
+    assert specified_context["recommendation_status"] == "estimate_only_unverified_rates"
+    assert specified_context["reliable_recommendation"] is False
+    assert any("no geography scope" in item for item in specified_context["limitations"])
+    assert any("no payment-method scope" in item for item in specified_context["limitations"])
 
 
 def test_vendor_seed_and_checks_preserve_evidence_gaps(db):

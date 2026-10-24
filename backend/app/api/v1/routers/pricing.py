@@ -120,15 +120,26 @@ def create_savings_scenario(body: SavingsScenarioCreate, db: Session = Depends(g
         if rule.currency and rule.currency != body.currency:
             limitations.append(f"{label.title()} rule currency {rule.currency} does not match scenario currency {body.currency}.")
             eligible = False
+        elif not rule.currency:
+            limitations.append(f"{label.title()} rule has no currency scope; scenario currency {body.currency} is assumed.")
         if rule.payment_method and rule.payment_method != body.payment_method:
             limitations.append(f"{label.title()} rule payment method does not match the scenario.")
             eligible = False
+        elif body.payment_method and not rule.payment_method:
+            limitations.append(f"{label.title()} rule has no payment-method scope; generic applicability is assumed.")
         if rule.country and rule.country != body.country:
             limitations.append(f"{label.title()} rule country does not match the scenario.")
+            eligible = False
+        elif body.country and not rule.country:
+            limitations.append(f"{label.title()} rule has no geography scope; generic applicability is assumed.")
+        if rule.fee_rate_pct is None:
+            limitations.append(f"{label.title()} rule has no percentage fee rate; fee estimate is unavailable.")
             eligible = False
         if rule.fixed_fee is not None and rule.fixed_fee_currency and rule.fixed_fee_currency != body.currency:
             limitations.append(f"{label.title()} fixed fee currency does not match scenario currency.")
             eligible = False
+        elif rule.fixed_fee is not None and not rule.fixed_fee_currency:
+            limitations.append(f"{label.title()} fixed-fee currency is missing; scenario currency is assumed.")
         if rule.effective_from and rule.effective_from.date() > scenario_time.date():
             limitations.append(f"{label.title()} pricing rule is not yet effective.")
             eligible = False
@@ -149,6 +160,14 @@ def create_savings_scenario(body: SavingsScenarioCreate, db: Session = Depends(g
         limitations.append("Alternative pricing rule is illustrative — not a verified contract rate.")
     elif alt_rule:
         limitations.append("Alternative pricing input is not independently verified against a signed contract.")
+
+    if not body.country:
+        limitations.append("Country/geography was not specified; no geography-specific routing conclusion is available.")
+    if not body.payment_method:
+        limitations.append("Payment method was not specified; no method-specific routing conclusion is available.")
+    if ((current_rule and current_rule.fixed_fee is not None)
+            or (alt_rule and alt_rule.fixed_fee is not None)):
+        limitations.append("The current calculator adds each configured fixed fee once per scenario; a per-transaction fixed-fee basis and transaction count are not modeled.")
 
     scenario = SavingsScenario(
         id=str(uuid.uuid4()),
@@ -183,12 +202,20 @@ def create_savings_scenario(body: SavingsScenarioCreate, db: Session = Depends(g
         "current_estimated_fee": str(current_fee) if current_fee is not None else None,
         "alternative_estimated_fee": str(alt_fee) if alt_fee is not None else None,
         "estimated_difference": str(difference) if difference is not None else None,
+        "estimated_lower_cost_gateway": (
+            body.current_gateway if difference is not None and difference < 0
+            else body.alternative_gateway if difference is not None and difference > 0
+            else None
+        ),
+        "recommendation_status": "estimate_only_unverified_rates" if difference is not None else "unavailable",
+        "reliable_recommendation": False,
         "is_estimate": True,
         "limitations": limitations,
         "assumptions_note": (
             "This is a scenario estimate based on configured pricing rules. "
-            "Actual fees depend on gateway contract terms, FX rates, and transaction mix. "
-            "Do not treat this as guaranteed savings."
+            "The percentage fee applies to the entered eligible volume; any configured fixed fee is added once per scenario. "
+            "Per-transaction fixed-fee units, FX, actual transaction mix, and signed contract terms are not independently verified. "
+            "A lower estimated fee is not a reliable routing recommendation or guaranteed savings."
         ),
     }
 

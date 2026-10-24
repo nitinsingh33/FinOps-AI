@@ -66,3 +66,81 @@ On 2026-10-23, verification was run from the repository checkout:
   `alembic current` reported `91ac47bbd032 (head)`.
 
 See the README for startup commands and environment requirements.
+
+## Task 1 payment and settlement analysis update (2026-10-24)
+
+### Implemented calculation behavior
+
+- Monthly dashboard rows are grouped by transaction month, gateway, payment
+  currency, fee currency, and tax currency. Captured Gateway A payment rows and
+  Gateway B charge rows are used; refund rows are kept out of gross payment
+  volume and remain separately available in refund reporting.
+- Fees and taxes are summed separately in their imported currencies. The
+  combined observed-cost figure is present only when fee/tax currencies match
+  and all corresponding amounts are present. Missing amounts are counted and
+  are never silently treated as zero; combined cost unavailability distinguishes
+  missing amounts from currency mismatch. A missing tax currency remains
+  `UNKNOWN` instead of being inferred from the fee currency. Effective fee rates are omitted if the
+  gross and fee currencies differ or any fee amount is missing.
+- The analytics chart includes only one user-visible currency at a time and
+  only rows whose gross and fee currencies match. The detailed monthly table
+  continues to show all currency combinations with explicit currency labels.
+- Settlement metrics are grouped by transaction month, gateway, currency, and
+  source timing basis. Gateway A uses transaction-ledger `settled_at`; Gateway
+  B separately reports balance `available_on` and payout-effective timestamps.
+  Average/median elapsed hours use only valid nonnegative timestamp pairs.
+  Missing completion dates, negative-duration pairs, and completion timestamps
+  conflicting with an explicitly unsettled flag are counted separately.
+  A payout-effective or available-on date is not independent bank receipt
+  evidence. No settlement SLA is inferred from these sample records.
+- Existing reconciliation compares imported ledger amounts and matching
+  records. It does not compare charges with contract prices because the repo has
+  no independently verified contract-rate evidence. The existing settlement
+  delay threshold is preserved; monthly timing metrics expose observed duration
+  without asserting a contractual SLA.
+- Pricing scenarios require selected pricing rules that match the requested
+  gateway and do not conflict with supplied currency, geography, method, or
+  effective dates. An omitted pricing-rule dimension is treated as generic
+  applicability only for the estimate and is called out as a limitation.
+  Outputs explicitly say estimate-only and do not produce a reliable routing recommendation. The current scenario formula applies a
+  configured fixed fee once per scenario; per-transaction fixed-fee units and
+  eligible transaction counts are not modeled, so scenarios containing fixed
+  fees must be treated as especially limited estimates.
+- The printable executive summary now includes recent monthly volume/count and
+  observed fees/taxes, settlement timings, the latest reconciliation and
+  exception amount-at-stake by currency, and the latest saved scenario when one
+  exists. Exception amount-at-stake can overlap across flags and is not a net
+  loss total.
+
+### Current verification evidence
+
+- `backend` — `python -m pytest -q`: **62 passed**, with one pytest-asyncio
+  deprecation warning. The workflow test imports all four supplied workbooks,
+  verifies row counts/warnings/retries, monthly currency behavior, settlement
+  timing coverage plus missing, negative, and status-conflicting date handling,
+  reconciliation, CSV, and executive-summary content.
+- `frontend` — project-local TypeScript build check (`tsc -b`) and Vite
+  production build both succeeded. The output retains the existing warning
+  about a generated JavaScript chunk exceeding 500 kB.
+- The shell `npm run build` wrapper was not usable in this environment because
+  its configured global npm CLI path points to a missing `AppData\Roaming`
+  install. The equivalent local `tsc` and `vite` binaries in `frontend` were
+  run successfully.
+- No schema or migration changes were needed for these additions. A fresh
+  PostgreSQL migration was therefore not rerun for this task; the earlier
+  clean-database migration evidence above remains the latest migration run.
+
+### Remaining limits
+
+- The supplied data is September 2026 synthetic/dummy data. Its observed costs
+  and settlement timings are examples from those source rows, not current
+  production performance.
+- Gateway B has no separate payout-transfer/bank statement in the provided
+  workbook. Payout totals and payout-effective durations remain based on that
+  workbook alone.
+- No signed/verified contract-rate dataset is present, so contractual charge
+  comparison, confirmed savings, and reliable gateway routing recommendations
+  remain unavailable.
+- Fixed-fee unit semantics and a transaction count for fixed-fee scenarios are
+  absent from the current pricing-rule inputs; the estimator states its
+  once-per-scenario assumption and must not be used as a contract quote.

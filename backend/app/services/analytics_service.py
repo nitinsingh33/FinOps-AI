@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from decimal import Decimal
+from statistics import median
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import func, and_
@@ -353,48 +354,66 @@ def get_gateway_cost_analysis(db: Session, gateway: Optional[str] = None) -> Dic
     undated_rows = 0
 
     def add_monthly(gateway_name: str, timestamp: Any, currency: str,
-                    fee_currency: Optional[str], gross: Any, fee: Any) -> None:
+                    fee_currency: Optional[str], tax_currency: Optional[str],
+                    gross: Any, fee: Any, tax: Any) -> None:
         nonlocal undated_rows
         if timestamp is None:
             undated_rows += 1
             return
         month = timestamp.strftime("%Y-%m")
-        key = (month, gateway_name, currency, fee_currency or currency)
+        source_fee_currency = fee_currency or currency
+        source_tax_currency = tax_currency or "UNKNOWN"
+        key = (month, gateway_name, currency, source_fee_currency, source_tax_currency)
         row = monthly.setdefault(key, {
             "month": month,
             "gateway": gateway_name,
             "currency": currency,
-            "fee_currency": fee_currency or currency,
+            "fee_currency": source_fee_currency,
+            "tax_currency": source_tax_currency,
             "transaction_count": 0,
             "gross_volume": Decimal("0"),
             "observed_fees": Decimal("0"),
+            "observed_tax": Decimal("0"),
+            "fee_records_with_amount": 0,
+            "fee_records_missing_amount": 0,
+            "tax_records_with_amount": 0,
+            "tax_records_missing_amount": 0,
         })
         row["transaction_count"] += 1
         row["gross_volume"] += gross or Decimal("0")
-        row["observed_fees"] += fee or Decimal("0")
+        if fee is None:
+            row["fee_records_missing_amount"] += 1
+        else:
+            row["fee_records_with_amount"] += 1
+            row["observed_fees"] += fee
+        if tax is None:
+            row["tax_records_missing_amount"] += 1
+        else:
+            row["tax_records_with_amount"] += 1
+            row["observed_tax"] += tax
 
     payment_rows = []
     if not gateway or gateway == "gateway_a":
         payment_rows = db.query(
             Payment.transacted_at, Payment.currency, Payment.fee_currency,
-            Payment.gross_amount, Payment.fee,
+            Payment.tax_currency, Payment.gross_amount, Payment.fee, Payment.tax,
         ).filter(Payment.gateway == "gateway_a", Payment.status == "captured").all()
     for row in payment_rows:
         add_monthly("gateway_a", row.transacted_at, row.currency,
-                    row.fee_currency, row.gross_amount, row.fee)
+                    row.fee_currency, row.tax_currency, row.gross_amount, row.fee, row.tax)
 
     gateway_b_rows = []
     if not gateway or gateway == "gateway_b":
         gateway_b_rows = db.query(
             GatewayTransaction.transacted_at, GatewayTransaction.currency,
-            GatewayTransaction.gross_amount, GatewayTransaction.fee,
+            GatewayTransaction.gross_amount, GatewayTransaction.fee, GatewayTransaction.tax,
         ).filter(
             GatewayTransaction.gateway == "gateway_b",
             GatewayTransaction.txn_type == "charge",
         ).all()
     for row in gateway_b_rows:
         add_monthly("gateway_b", row.transacted_at, row.currency,
-                    row.currency, row.gross_amount, row.fee)
+                    row.currency, row.currency, row.gross_amount, row.fee, row.tax)
 
     monthly_rows = []
     for key in sorted(monthly):
@@ -405,13 +424,143 @@ def get_gateway_cost_analysis(db: Session, gateway: Optional[str] = None) -> Dic
             **row,
             "gross_volume": float(gross),
             "observed_fees": float(fees),
+            "observed_tax": float(row["observed_tax"]),
+            "fee_records_with_amount": row["fee_records_with_amount"],
+            "fee_records_missing_amount": row["fee_records_missing_amount"],
+            "tax_records_with_amount": row["tax_records_with_amount"],
+            "tax_records_missing_amount": row["tax_records_missing_amount"],
+            "observed_cost": float(fees + row["observed_tax"])
+                if row["fee_currency"] == row["tax_currency"]
+                and row["fee_records_missing_amount"] == 0
+                and row["tax_records_missing_amount"] == 0 else None,
+            "observed_cost_currency": row["fee_currency"]
+                if row["fee_currency"] == row["tax_currency"]
+                and row["fee_records_missing_amount"] == 0
+                and row["tax_records_missing_amount"] == 0 else None,
+            "observed_cost_unavailable_reason": (
+                "currency_mismatch" if row["fee_currency"] != row["tax_currency"]
+                else "missing_amounts" if row["fee_records_missing_amount"] or row["tax_records_missing_amount"]
+                else None
+            ),
             "effective_fee_rate_pct": round(float(fees / gross * 100), 4)
-                if gross and row["currency"] == row["fee_currency"] else None,
+                if gross and row["currency"] == row["fee_currency"] and row["fee_records_missing_amount"] == 0 else None,
         })
     result["monthly_breakdowns"] = monthly_rows
     result["monthly_data_note"] = (
         f"Based on captured Gateway A payments and Gateway B charge rows; "
         f"{undated_rows} eligible rows without transaction dates are omitted. "
-        "Fees are observed in imported records, not verified contract rates."
+        "Fees and taxes are reported separately in their source currencies; observed cost is shown only when fee and tax currencies match. Missing amounts are not treated as zero. Fees are not verified contract rates."
     )
     return result
+
+
+def get_settlement_analysis(db: Session) -> Dict[str, Any]:
+    """Summarize source-recorded settlement/availability timings by transaction month.
+
+    Gateway A uses its transaction ledger settled_at. Gateway B reports both the
+    balance-export available_on delay and its payout-effective timestamp. These
+    source fields do not constitute independent bank confirmation.
+    """
+    rows = db.query(GatewayTransaction).filter(
+        GatewayTransaction.txn_type == "payment",
+        GatewayTransaction.gateway == "gateway_a",
+    ).all()
+    b_rows = db.query(GatewayTransaction).filter(
+        GatewayTransaction.txn_type == "charge",
+        GatewayTransaction.gateway == "gateway_b",
+    ).all()
+    groups: Dict[tuple, Dict[str, Any]] = {}
+
+    def add(gateway: str, currency: str, basis: str, transaction_at: Any,
+            completion_at: Any, settled_flag: Optional[bool]) -> None:
+        if transaction_at is None:
+            return
+        month = transaction_at.strftime("%Y-%m")
+        key = (month, gateway, currency, basis)
+        group = groups.setdefault(key, {
+            "month": month, "gateway": gateway, "currency": currency,
+            "timing_basis": basis, "source_rows": 0, "settled_or_payout_linked": 0,
+            "explicitly_unsettled": 0, "settlement_status_unknown": 0,
+            "missing_completion_time": 0, "invalid_negative_duration": 0,
+            "completion_time_unsettled_conflict": 0,
+            "durations_hours": [],
+        })
+        group["source_rows"] += 1
+        if settled_flag is True:
+            group["settled_or_payout_linked"] += 1
+        elif settled_flag is False:
+            group["explicitly_unsettled"] += 1
+        else:
+            group["settlement_status_unknown"] += 1
+        if completion_at is None:
+            group["missing_completion_time"] += 1
+            return
+        if settled_flag is False:
+            group["completion_time_unsettled_conflict"] += 1
+            return
+        delta = completion_at - transaction_at
+        hours = delta.total_seconds() / 3600
+        if hours < 0:
+            group["invalid_negative_duration"] += 1
+            return
+        group["durations_hours"].append(hours)
+
+    for txn in rows:
+        add("gateway_a", txn.currency, "transaction settled_at", txn.transacted_at,
+            txn.settled_at, txn.is_settled)
+    for txn in b_rows:
+        add("gateway_b", txn.currency, "balance available_on", txn.transacted_at,
+            txn.available_on, txn.is_settled)
+        if txn.payout_id:
+            add("gateway_b", txn.currency, "payout effective timestamp", txn.transacted_at,
+                txn.settled_at, txn.is_settled)
+
+    monthly = []
+    for key in sorted(groups):
+        group = groups[key]
+        durations = group.pop("durations_hours")
+        group["timed_rows"] = len(durations)
+        group["average_hours"] = round(sum(durations) / len(durations), 2) if durations else None
+        group["median_hours"] = round(median(durations), 2) if durations else None
+        monthly.append(group)
+
+    # Preserve the existing settlement and payout summaries for current UI/API users.
+    from sqlalchemy import case
+    gwa_settled = (
+        db.query(GatewayTransaction.txn_type, GatewayTransaction.currency,
+                 func.count(GatewayTransaction.id).label("count"),
+                 func.sum(GatewayTransaction.credit_amount).label("total_credit"))
+        .filter(GatewayTransaction.gateway == "gateway_a",
+                GatewayTransaction.txn_type.in_(["settlement", "offer_settlement"]))
+        .group_by(GatewayTransaction.txn_type, GatewayTransaction.currency).all()
+    )
+    gwb_payout = (
+        db.query(GatewayTransaction.payout_id, GatewayTransaction.currency,
+                 func.count(GatewayTransaction.id).label("count"),
+                 func.sum(GatewayTransaction.net_amount).label("total_net"),
+                 func.sum(case((GatewayTransaction.txn_type == "charge", 1), else_=0)).label("charge_count"))
+        .filter(GatewayTransaction.gateway == "gateway_b")
+        .group_by(GatewayTransaction.payout_id, GatewayTransaction.currency).all()
+    )
+    return {
+        "monthly_settlement_metrics": monthly,
+        "timing_data_note": (
+            "Gateway A duration is transaction time to the ledger settled_at value. Gateway B durations use balance available_on or the source payout-effective timestamp. These are source-reported timings, not independently verified bank receipt. Months are assigned by transaction date; rows without a transaction date are omitted."
+        ),
+        "gateway_a_settlement_summary": [
+            {"transaction_type": r.txn_type, "currency": r.currency,
+             "settlement_records": r.count, "observed_credit": float(r.total_credit or 0)}
+            for r in gwa_settled
+        ],
+        "gateway_b_payout_summary": {
+            "total_payouts": len([r for r in gwb_payout if r.payout_id]),
+            "charges_without_payout": sum(r.charge_count for r in gwb_payout if not r.payout_id),
+            "amount_basis": "Sum of imported balance transaction net amounts grouped by payout ID and currency; independent payout transfer amounts are not present in the supplied dataset.",
+            "sample_payouts": [
+                {"payout_id": r.payout_id, "currency": r.currency,
+                 "balance_record_count": r.count, "charge_count": r.charge_count,
+                 "total_net": float(r.total_net or 0)}
+                for r in gwb_payout[:10] if r.payout_id
+            ],
+        },
+    }

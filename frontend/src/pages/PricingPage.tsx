@@ -290,7 +290,10 @@ function SavingsScenarioModal({ rules, onClose, onSubmit, loading, result }: {
                   <div style={{ marginTop: 20, textAlign: 'center' }}>
                     <div style={{ fontSize: 11, color: 'var(--color-text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 4 }}>Estimated Difference</div>
                     <div style={{ fontSize: 32, fontWeight: 800, color: parseFloat(result.estimated_difference as string) > 0 ? 'var(--color-success)' : 'var(--color-danger)', fontFamily: 'var(--font-mono)' }}>
-                      {result.estimated_difference as string}
+                      {result.currency as string} {result.estimated_difference as string}
+                    </div>
+                    <div className="text-sm text-muted" style={{ marginTop: 6 }}>
+                      Lower estimated fee: {result.estimated_lower_cost_gateway as string ?? 'No difference'} · No reliable routing recommendation because rates are unverified.
                     </div>
                   </div>
                 )}

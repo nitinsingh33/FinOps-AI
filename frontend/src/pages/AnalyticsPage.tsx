@@ -19,6 +19,7 @@ const COLORS = ['#4f9cf9', '#7c3aed', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'
 
 export default function AnalyticsPage() {
   const [gateway, setGateway] = useState('')
+  const [chartCurrencySelection, setChartCurrencySelection] = useState('')
 
   const { data: costsData, isLoading: costsLoading } = useQuery({
     queryKey: ['gateway-costs', gateway],
@@ -32,10 +33,17 @@ export default function AnalyticsPage() {
 
   const breakdowns = costsData?.breakdowns ?? []
   const monthlyBreakdowns = costsData?.monthly_breakdowns ?? []
+  const monthlySettlementMetrics = settlData?.monthly_settlement_metrics ?? []
   const summary = costsData?.summary ?? {}
 
   // Prepare bar chart data: group by currency
-  const barData = breakdowns.slice(0, 10).map((b: { gateway: string; currency: string; payment_count: number; gross_volume: number; total_fees: number; effective_rate_pct: number }) => ({
+  const comparableCurrencies: string[] = Array.from(new Set<string>(breakdowns
+    .filter((b: { currency: string; fee_currency?: string }) => b.currency === b.fee_currency)
+    .map((b: { currency: string }) => b.currency))).sort()
+  const chartCurrency = comparableCurrencies.includes(chartCurrencySelection)
+    ? chartCurrencySelection
+    : comparableCurrencies.includes('INR') ? 'INR' : comparableCurrencies[0] ?? ''
+  const barData = breakdowns.filter((b: { currency: string; fee_currency?: string }) => b.currency === b.fee_currency && b.currency === chartCurrency).slice(0, 10).map((b: { gateway: string; currency: string; payment_count: number; gross_volume: number; total_fees: number; effective_rate_pct: number }) => ({
     name: `${b.gateway?.toUpperCase() ?? ''} ${b.currency ?? ''}`,
     'Gross Volume': Math.round(b.gross_volume ?? 0),
     'Total Fees': Math.round(b.total_fees ?? 0),
@@ -97,17 +105,19 @@ export default function AnalyticsPage() {
             </div>
           ) : (
             <table className="data-table">
-              <thead><tr><th>Month</th><th>Gateway</th><th>Currency</th><th>Transactions</th><th>Gross Volume</th><th>Observed Fees</th><th>Effective Fee Rate</th></tr></thead>
+              <thead><tr><th>Month</th><th>Gateway</th><th>Payment currency</th><th>Transactions</th><th>Gross Volume</th><th>Observed Fees</th><th>Observed Tax</th><th>Observed cost</th><th>Effective Fee Rate</th></tr></thead>
               <tbody>{monthlyBreakdowns
                 .filter((row: { gateway: string }) => !gateway || row.gateway === gateway)
-                .map((row: { month: string; gateway: string; currency: string; fee_currency: string; transaction_count: number; gross_volume: number; observed_fees: number; effective_fee_rate_pct: number | null }, i: number) => (
-                  <tr key={`${row.month}-${row.gateway}-${row.currency}-${row.fee_currency}-${i}`}>
+                .map((row: { month: string; gateway: string; currency: string; fee_currency: string; tax_currency: string; transaction_count: number; gross_volume: number; observed_fees: number; observed_tax: number; observed_cost: number | null; observed_cost_currency: string | null; observed_cost_unavailable_reason: string | null; fee_records_missing_amount: number; tax_records_missing_amount: number; effective_fee_rate_pct: number | null }, i: number) => (
+                  <tr key={`${row.month}-${row.gateway}-${row.currency}-${row.fee_currency}-${row.tax_currency}-${i}`}>
                     <td>{row.month}</td>
                     <td><span className="badge badge-purple">{row.gateway}</span></td>
                     <td>{row.currency}</td>
                     <td>{row.transaction_count.toLocaleString('en-IN')}</td>
                     <td className="td-amount">{row.currency} {row.gross_volume.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
-                    <td className="td-amount">{row.fee_currency} {row.observed_fees.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td className="td-amount">{row.fee_currency} {row.observed_fees.toLocaleString('en-IN', { maximumFractionDigits: 2 })}{row.fee_records_missing_amount ? ` (${row.fee_records_missing_amount} missing)` : ''}</td>
+                    <td className="td-amount">{row.tax_currency} {row.observed_tax.toLocaleString('en-IN', { maximumFractionDigits: 2 })}{row.tax_records_missing_amount ? ` (${row.tax_records_missing_amount} missing)` : ''}</td>
+                    <td className="td-amount">{row.observed_cost == null ? (row.observed_cost_unavailable_reason === 'missing_amounts' ? 'Incomplete amounts' : 'Currencies differ') : `${row.observed_cost_currency} ${row.observed_cost.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`}</td>
                     <td>{row.effective_fee_rate_pct == null ? 'Not comparable across currencies' : `${row.effective_fee_rate_pct.toFixed(3)}%`}</td>
                   </tr>
                 ))}</tbody>
@@ -117,14 +127,40 @@ export default function AnalyticsPage() {
         <p className="text-sm text-muted" style={{ padding: '0 16px 16px' }}>{costsData?.monthly_data_note}</p>
       </div>
 
+      <div className="card mb-8">
+        <div className="card-header">
+          <span className="card-title"><LineChartIcon size={16} color="var(--color-cyan)" /> Monthly Settlement Timing</span>
+          <span className="text-sm text-muted">Source-reported timing</span>
+        </div>
+        <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
+          {monthlySettlementMetrics.length === 0 ? (
+            <div className="empty-state" style={{ padding: 24 }}><p className="empty-state-title">No dated settlement records</p></div>
+          ) : (
+            <table className="data-table">
+              <thead><tr><th>Transaction month</th><th>Gateway</th><th>Currency</th><th>Timing basis</th><th>Rows timed</th><th>Median hours</th><th>Average hours</th><th>Linked / settled</th><th>Explicitly unsettled</th><th>Unknown status</th><th>Missing time</th><th>Time/status conflict</th><th>Invalid negative</th></tr></thead>
+              <tbody>{monthlySettlementMetrics
+                .filter((row: { gateway: string }) => !gateway || row.gateway === gateway)
+                .map((row: { month: string; gateway: string; currency: string; timing_basis: string; source_rows: number; timed_rows: number; median_hours: number | null; average_hours: number | null; settled_or_payout_linked: number; explicitly_unsettled: number; settlement_status_unknown: number; missing_completion_time: number; completion_time_unsettled_conflict: number; invalid_negative_duration: number }, i: number) => (
+                  <tr key={`${row.month}-${row.gateway}-${row.currency}-${row.timing_basis}-${i}`}>
+                    <td>{row.month}</td><td><span className="badge badge-purple">{row.gateway}</span></td><td>{row.currency}</td><td>{row.timing_basis}</td>
+                    <td>{row.timed_rows} / {row.source_rows}</td><td>{row.median_hours == null ? '—' : `${row.median_hours.toLocaleString('en-IN')} h`}</td><td>{row.average_hours == null ? '—' : `${row.average_hours.toLocaleString('en-IN')} h`}</td><td>{row.settled_or_payout_linked}</td><td>{row.explicitly_unsettled}</td><td>{row.settlement_status_unknown}</td><td>{row.missing_completion_time}</td><td>{row.completion_time_unsettled_conflict}</td><td>{row.invalid_negative_duration}</td>
+                  </tr>
+                ))}</tbody>
+            </table>
+          )}
+        </div>
+        <p className="text-sm text-muted" style={{ padding: '0 16px 16px' }}>{settlData?.timing_data_note}</p>
+      </div>
+
       <div className="grid-2 mb-8">
         {/* Gateway cost bar chart */}
         <div className="card">
           <div className="card-header">
             <span className="card-title">
               <DollarSign size={16} color="var(--color-accent)" />
-              Volume vs Fees by Gateway &amp; Currency
+              Volume vs Fees (same-currency rows only)
             </span>
+          {comparableCurrencies.length > 1 && <select className="form-select" style={{ width: 'auto' }} value={chartCurrency} onChange={e => setChartCurrencySelection(e.target.value)} aria-label="Chart currency"><option value="" disabled>Select currency</option>{comparableCurrencies.map((currency: string) => <option key={currency} value={currency}>{currency}</option>)}</select>}
           </div>
           <div className="card-body">
             {costsLoading ? (
