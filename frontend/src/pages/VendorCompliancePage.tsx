@@ -11,7 +11,7 @@ type Vendor = {
   vendor_type: string; msme_type: string; is_synthetic: boolean
   scorecard: null | { status: string; risk_score: number; total_amount_at_stake: string; currency: string; summary_reasons: string[]; evidence_coverage: Record<string, number> }
 }
-type VendorException = { id: string; vendor_id: string; category: string; severity: string; title: string; description: string; amount_at_stake: string | null; currency: string; missing_information: string[]; is_synthetic_warning: boolean }
+type VendorException = { id: string; vendor_id: string; category: string; severity: string; title: string; description: string; amount_at_stake: string | null; currency: string; missing_information: string[]; suggested_action: string; is_synthetic_warning: boolean }
 type CleanupItem = { id: string; vendor_id: string; issue_type: string; severity: string; field_name: string; description: string; recommended_fix: string }
 type TaxRule = { id: string; rule_code: string; tax_category: string; section_1961: string | null; section_2025: string | null; description: string; rate_pct: string; threshold_amount: string; effective_from: string; effective_to: string | null; verification_status: string; version: string; source_reference: string | null; is_sample_rule: boolean }
 
@@ -103,6 +103,7 @@ export default function VendorCompliancePage() {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}><strong>{e.title}</strong><span className={`badge ${e.severity === 'high' ? 'badge-danger' : 'badge-warning'}`}>{e.severity}</span></div>
           <p className="text-sm text-muted" style={{ marginTop: 6 }}>{e.description}</p>
           {e.amount_at_stake && <p className="text-sm">Exposure: {e.currency} {Number(e.amount_at_stake).toLocaleString()}</p>}
+          <p className="text-sm">Suggested action: {e.suggested_action}</p>
           {e.missing_information.length > 0 && <p className="text-sm" style={{ color: 'var(--color-warning)', marginTop: 6 }}>Missing evidence: {e.missing_information.join('; ')}</p>}
           {e.is_synthetic_warning && <span className="badge badge-info" style={{ marginTop: 6 }}>Synthetic example</span>}
         </article>)}

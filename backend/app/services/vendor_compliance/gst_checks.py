@@ -236,16 +236,24 @@ def check_gstr2b_match(
     IMPORTANT: This performs exact-match on invoice_number + gstin_supplier + return_period.
     Format differences (casing, spacing) may cause false mismatches.
     """
-    if not gstr2b_invoices:
-        return "data_unavailable", "No GSTR-2B records loaded for this period"
-
     inv_norm = invoice_number.strip().upper() if invoice_number else ""
     gstin_norm = gstin_supplier.strip().upper() if gstin_supplier else ""
+    if not inv_norm or not gstin_norm or not return_period:
+        return "data_unavailable", "Invoice, supplier GSTIN, or return period is missing"
 
-    for rec in gstr2b_invoices:
-        if (rec.get("invoice_number", "").strip().upper() == inv_norm
-                and rec.get("gstin_supplier", "").strip().upper() == gstin_norm
-                and rec.get("return_period", "") == return_period):
+    period_records = [
+        rec for rec in gstr2b_invoices
+        if rec.get("gstin_supplier", "").strip().upper() == gstin_norm
+        and rec.get("return_period", "") == return_period
+    ]
+    if not period_records:
+        return "data_unavailable", (
+            f"No GSTR-2B evidence is available for supplier {gstin_supplier} "
+            f"in period {return_period}; absence cannot be confirmed."
+        )
+
+    for rec in period_records:
+        if rec.get("invoice_number", "").strip().upper() == inv_norm:
             return "matched", None
 
     return "missing", (

@@ -144,3 +144,64 @@ See the README for startup commands and environment requirements.
 - Fixed-fee unit semantics and a transaction count for fixed-fee scenarios are
   absent from the current pricing-rule inputs; the estimator states its
   once-per-scenario assumption and must not be used as a contract quote.
+
+## Task 2 vendor compliance update (2026-10-24)
+
+### Implemented and checked
+
+- GSTR-2B matching now distinguishes a confirmed invoice mismatch from missing
+  evidence. It labels an invoice `missing` only when at least one record for
+  the same supplier GSTIN and return period is loaded but that invoice is not
+  among them. If that supplier/period has no records, or the GSTIN is absent,
+  the check creates `GST_GSTR2B_EVIDENCE_UNAVAILABLE`, records the missing
+  evidence, and does not mark the check compliant.
+- The synthetic demo includes a same-period unrelated invoice to demonstrate a
+  confirmed GSTR-2B mismatch, and a matching row for the exact-45-day MSME case.
+  Its PAN mismatch case now uses a valid PAN format that differs from the PAN
+  embedded in the GSTIN. Expected outcomes in `synthetic_data.py` were adjusted
+  to match actual evidence and the current risk scorecard behavior.
+- An overall vendor scorecard cannot say `compliant` while it has any recorded
+  exception. It is `needs_attention` when findings exist below the high-risk
+  score threshold, and `high_risk` above that threshold.
+- The exception API now returns `suggested_action`, and the Vendor Compliance
+  page displays it with the description, amount at stake, currency, and any
+  missing evidence. Scorecards and vendor master cleanup remain available via
+  the existing APIs and page.
+- The synthetic “short TDS” invoice is not reported as a confirmed short
+  deduction: seeded rules remain unapproved samples, so the engine returns
+  `TDS_RULE_UNVERIFIED` and requires an approved, effective rule. Foreign
+  payment evidence remains explicitly unconfirmed; the workflow does not
+  infer a legal threshold or documentation requirement from this demo.
+- Tests cover TDS threshold boundaries and missing challan evidence, foreign
+  vendor missing documents, MSME payment exactly on day 45, and a partially
+  paid invoice whose remaining amount is reported as the amount at stake.
+  They also verify all seeded vendors against `EXPECTED_OUTCOMES` and check
+  scorecard, exception-report, and cleanup-list API deliverables.
+
+### Executed verification
+
+- `backend`: `venv\Scripts\python.exe -m pytest -q` — **70 passed**, one
+  `pytest-asyncio` deprecation warning.
+- `backend`: `venv\Scripts\python.exe -m pytest tests/integration/test_vendor_compliance.py -q`
+  — **8 passed**, one `pytest-asyncio` deprecation warning.
+- `frontend`: project-local `tsc -b` and `vite build` — both succeeded. Vite
+  still reports the existing generated JavaScript chunk above 500 kB.
+
+### Remaining limits
+
+- Vendor, invoice, return, and challan examples are synthetic demonstration
+  records, not HR-provided vendor evidence or proof of real-world compliance.
+- The database has no GSTR-2B upload/period manifest. Therefore an empty
+  supplier/period is safely classified as evidence unavailable; completeness
+  of a purportedly loaded period cannot be independently verified by this
+  application. A confirmed mismatch is limited to the available rows for that
+  supplier and period.
+- No tax-team-approved rule set is supplied. Sample TDS rates are not used for
+  deductions, and the demo cannot confirm statutory rate/threshold/section
+  applicability, PAN operative status, GST portal status, or cross-border
+  documentation obligations from authoritative sources. These require review
+  and evidence entered in the approved environment.
+- MSME elapsed-day checks use acceptance date when recorded and invoice date as
+  the documented fallback. Dispute treatment and statutory interest remain
+  subject to human/legal review; the application does not calculate an
+  authoritative interest liability.

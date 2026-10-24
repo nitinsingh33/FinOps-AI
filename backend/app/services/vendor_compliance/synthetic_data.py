@@ -38,9 +38,9 @@ def _id() -> str:
 # Expected outcomes for test verification (documented ground truth)
 EXPECTED_OUTCOMES = {
     "VENDOR_COMPLIANT_001": {
-        "status": "compliant",
-        "expected_exceptions": [],
-        "notes": "All data valid, payment within 45 days, TDS correct",
+        "status": "needs_attention",
+        "expected_exceptions": ["TDS_RULE_UNVERIFIED"],
+        "notes": "Vendor and payment evidence is present, but no approved TDS rule exists to confirm the rate.",
     },
     "VENDOR_GSTIN_BAD_001": {
         "status": "high_risk",
@@ -48,7 +48,7 @@ EXPECTED_OUTCOMES = {
         "notes": "GSTIN is 12 chars instead of 15",
     },
     "VENDOR_PAN_MISMATCH_001": {
-        "status": "high_risk",
+        "status": "needs_attention",
         "expected_exceptions": ["MASTER_PAN_GSTIN_MISMATCH"],
         "notes": "PAN does not match GSTIN-embedded PAN",
     },
@@ -58,7 +58,7 @@ EXPECTED_OUTCOMES = {
         "notes": "Payment made 60 days after invoice — MSME breach",
     },
     "VENDOR_ITC_REVERSAL_001": {
-        "status": "high_risk",
+        "status": "needs_attention",
         "expected_exceptions": ["GST_ITC_180_DAY"],
         "notes": "Payment after 180 days — ITC must be reversed",
     },
@@ -69,18 +69,18 @@ EXPECTED_OUTCOMES = {
     },
     "VENDOR_TDS_SHORT_001": {
         "status": "high_risk",
-        "expected_exceptions": ["TDS_DEDUCTION_MISMATCH"],
-        "notes": "TDS deducted at 1% instead of 10% under 194J",
+        "expected_exceptions": ["TDS_RULE_UNVERIFIED"],
+        "notes": "Stored deduction differs from an illustrative sample only; no approved rule exists, so the engine must not confirm a short deduction.",
     },
     "VENDOR_BLOCKED_ITC_001": {
-        "status": "high_risk",
+        "status": "needs_attention",
         "expected_exceptions": ["GST_BLOCKED_ITC"],
         "notes": "Invoice is for food/beverage — ITC blocked under 17(5)",
     },
     "VENDOR_FOREIGN_001": {
         "status": "high_risk",
-        "expected_exceptions": ["TDS_FOREIGN_MISSING_15CA_15CB"],
-        "notes": "Foreign vendor large payment without Form 15CA/15CB",
+        "expected_exceptions": ["TDS_FOREIGN_DOCUMENTATION_UNCONFIRMED"],
+        "notes": "Cross-border evidence is unrecorded; required documents depend on facts and must be determined by tax review.",
     },
     "VENDOR_MSME_EXACT_45_001": {
         "status": "compliant",
@@ -151,6 +151,7 @@ def seed_vendor_compliance_data(db: Session) -> dict:
             deductee_pan="AABCC1234D", invoice_number="CTS/2026/001",
             section_code="194J", amount_paid=Decimal("100000.00"),
             tax_deducted=Decimal("10000.00"), tax_deposited=Decimal("10000.00"),
+            challan_no="SYNTH-CHALLAN-CTS-001",
             is_synthetic=True,
         )
         db.add(ret1); counts["returns"] += 1
@@ -190,7 +191,7 @@ def seed_vendor_compliance_data(db: Session) -> dict:
         v3 = VendorMaster(
             id=_id(), vendor_code=v3_code,
             legal_name="PAN Mismatch Trading Co",
-            pan="WRONGPAN9X",  # Does not match GSTIN-embedded PAN
+            pan="AABPM5678G",  # Valid PAN format, differs from GSTIN-embedded PAN
             is_pan_verified=False,
             gstin="27AABPM5678F1Z5",  # Embeds PAN AABPM5678F
             is_gstin_verified=True, gstin_status="ACTIVE",
@@ -296,7 +297,8 @@ def seed_vendor_compliance_data(db: Session) -> dict:
             tds_deducted_amount=Decimal("0.00"), is_synthetic=True,
         )
         db.add(inv6); db.flush(); counts["invoices"] += 1
-        # NO GSTR2B record added — this will trigger the missing check
+        # Source evidence exists for this supplier and period, but the invoice
+        # itself is absent. This is a confirmed mismatch, unlike an unloaded period.
 
         p6 = VendorPayment(
             id=_id(), vendor_id=v6.id, invoice_id=inv6.id,
@@ -428,6 +430,45 @@ def seed_vendor_compliance_data(db: Session) -> dict:
             net_amount_paid=Decimal("29500.00"), is_synthetic=True,
         )
         db.add(p10); counts["payments"] += 1
+
+    # Keep supplemental evidence idempotent and repair already-seeded demo
+    # databases too. The per-vendor blocks above are intentionally create-only.
+    for vendor_code, invoice_number, return_period, invoice_date, gstin, taxable, cgst, sgst in (
+        ("VENDOR_GSTR2B_MISSING_001", "OTHER/MGS/2026/001", "092026", date(2026, 9, 12),
+         "07AAFMG3456I1ZQ", Decimal("1000.00"), Decimal("90.00"), Decimal("90.00")),
+        ("VENDOR_MSME_EXACT_45_001", "EBM/2026/001", "092026", date(2026, 9, 1),
+         "24AAJEB1122L1ZT", Decimal("25000.00"), Decimal("2250.00"), Decimal("2250.00")),
+    ):
+        if not db.query(GSTR2BRecord).filter_by(
+            gstin_supplier=gstin, invoice_number=invoice_number, return_period=return_period
+        ).first():
+            db.add(GSTR2BRecord(
+                id=_id(), gstin_supplier=gstin, invoice_number=invoice_number,
+                invoice_date=invoice_date, taxable_value=taxable, cgst=cgst, sgst=sgst,
+                igst=Decimal("0.00"), itc_availability="Y", return_period=return_period,
+                is_synthetic=True,
+            ))
+            counts["gstr2b"] += 1
+
+    compliant_invoice = db.query(VendorInvoice).join(VendorMaster).filter(
+        VendorMaster.vendor_code == "VENDOR_COMPLIANT_001",
+        VendorInvoice.invoice_number == "CTS/2026/001",
+    ).first()
+    if compliant_invoice:
+        challan_no = "SYNTH-CHALLAN-CTS-001"
+        if not db.query(TDSChallan).filter_by(challan_no=challan_no).first():
+            db.add(TDSChallan(
+                id=_id(), challan_no=challan_no, bsr_code="SYNTHETIC",
+                deposit_date=date(2026, 10, 7), tax_amount=Decimal("10000.00"),
+                total_amount=Decimal("10000.00"), financial_year="2026-27", quarter="Q2",
+                section_code="194J", is_synthetic=True,
+            ))
+            counts["challans"] += 1
+        return_record = db.query(TDSReturnRecord).filter_by(
+            deductee_pan="AABCC1234D", invoice_number="CTS/2026/001", section_code="194J"
+        ).first()
+        if return_record and return_record.challan_no != challan_no:
+            return_record.challan_no = challan_no
 
     # -----------------------------------------------------------------------
     # Sample TDS rules (clearly marked illustrative)

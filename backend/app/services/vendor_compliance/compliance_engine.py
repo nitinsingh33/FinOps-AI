@@ -13,8 +13,8 @@ Risk scoring:
 - Unverified GSTIN/PAN:        +10 points each
 - Unverified MSME:             +5 points
 
-Score 0-25: Compliant
-Score 26-60: Needs Attention
+Score 0-25 with no exceptions: Compliant
+Any recorded finding below 61: Needs Attention
 Score 61+: High Risk
 
 Prevent double-counting:
@@ -259,33 +259,44 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
             exceptions.append(exc)
             risk_score += SCORE_WEIGHTS["high"]
 
-        # GSTR-2B matching
-        if vendor.gstin:
-            inv_date = inv.invoice_date
-            return_period = f"{inv_date.month:02d}{inv_date.year}"
-            status, gstr2b_msg = check_gstr2b_match(
-                inv.invoice_number, vendor.gstin, return_period, gstr2b_records
+        # A missing GSTR-2B record is only a confirmed mismatch when source
+        # evidence for the same supplier and period exists. Otherwise record
+        # an evidence gap; never infer a match from an empty/unloaded period.
+        inv_date = inv.invoice_date
+        return_period = f"{inv_date.month:02d}{inv_date.year}"
+        status, gstr2b_msg = check_gstr2b_match(
+            inv.invoice_number, vendor.gstin or "", return_period, gstr2b_records
+        )
+        if status in ("missing", "data_unavailable"):
+            confirmed_mismatch = status == "missing"
+            exc = _add_exception(
+                db, vendor_id,
+                check_code=("GST_GSTR2B_MISSING" if confirmed_mismatch
+                            else "GST_GSTR2B_EVIDENCE_UNAVAILABLE"),
+                category="gst",
+                severity="medium",
+                title=(f"Invoice {inv.invoice_number} not found in GSTR-2B"
+                       if confirmed_mismatch else
+                       f"GSTR-2B evidence unavailable for invoice {inv.invoice_number}"),
+                description=gstr2b_msg,
+                suggested_action=("Follow up with vendor to file GSTR-1. Do not claim ITC until invoice appears in GSTR-2B."
+                                  if confirmed_mismatch else
+                                  "Load the supplier's GSTR-2B records for this return period and verify the invoice before claiming ITC."),
+                invoice_id=inv.id,
+                evidence={
+                    "invoice_number": inv.invoice_number,
+                    "return_period": return_period,
+                    "gstin_supplier": vendor.gstin,
+                    "match_status": status,
+                },
+                missing_information=(None if confirmed_mismatch else [
+                    "Supplier GSTIN evidence" if not vendor.gstin else
+                    f"GSTR-2B source evidence for return period {return_period}"
+                ]),
+                amount_at_stake=inv.total_tax_amount,
             )
-            if status == "missing":
-                exc = _add_exception(
-                    db, vendor_id,
-                    check_code="GST_GSTR2B_MISSING",
-                    category="gst",
-                    severity="medium",
-                    title=f"Invoice {inv.invoice_number} not found in GSTR-2B",
-                    description=gstr2b_msg,
-                    suggested_action="Follow up with vendor to file GSTR-1. "
-                                     "Do not claim ITC until invoice appears in GSTR-2B.",
-                    invoice_id=inv.id,
-                    evidence={
-                        "invoice_number": inv.invoice_number,
-                        "return_period": return_period,
-                        "gstin_supplier": vendor.gstin,
-                    },
-                    amount_at_stake=inv.total_tax_amount,
-                )
-                exceptions.append(exc)
-                risk_score += SCORE_WEIGHTS["medium"]
+            exceptions.append(exc)
+            risk_score += SCORE_WEIGHTS["medium"]
 
         # Blocked ITC check
         itc_blocked, itc_reason = check_blocked_itc(inv.blocked_itc_category)
@@ -522,15 +533,17 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
     # -----------------------------------------------------------------------
     risk_score = min(risk_score, 100)
 
-    if risk_score <= SCORE_THRESHOLDS["compliant"]:
-        status = ComplianceStatus.COMPLIANT
-        gst_status = tds_status = msme_status = "compliant"
-    elif risk_score <= SCORE_THRESHOLDS["needs_attention"]:
+    if risk_score > SCORE_THRESHOLDS["needs_attention"]:
+        status = ComplianceStatus.HIGH_RISK
+        gst_status = tds_status = msme_status = "high_risk"
+    elif exceptions or risk_score > SCORE_THRESHOLDS["compliant"]:
+        # A low numeric score cannot override open evidence gaps or findings.
+        # Reserve "compliant" for vendors with no recorded exceptions.
         status = ComplianceStatus.NEEDS_ATTENTION
         gst_status = tds_status = msme_status = "needs_attention"
     else:
-        status = ComplianceStatus.HIGH_RISK
-        gst_status = tds_status = msme_status = "high_risk"
+        status = ComplianceStatus.COMPLIANT
+        gst_status = tds_status = msme_status = "compliant"
 
     # Per-category status
     gst_excs = [e for e in exceptions if e.category == "gst"]

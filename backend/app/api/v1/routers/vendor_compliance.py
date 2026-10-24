@@ -98,6 +98,7 @@ def list_exceptions(category: Optional[str] = None, status: Optional[str] = None
              "category": e.category, "severity": e.severity, "title": e.title,
              "description": e.description, "amount_at_stake": str(e.amount_at_stake) if e.amount_at_stake is not None else None,
              "currency": e.currency, "missing_information": e.missing_information or [],
+             "suggested_action": e.suggested_action,
              "review_status": e.review_status, "is_synthetic_warning": e.is_synthetic_warning}
             for e in rows]
 
