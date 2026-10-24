@@ -18,6 +18,7 @@ from app.models.models import (
 from app.models.vendor_compliance import VendorComplianceException, VendorMaster, VendorScorecard
 from app.services.import_service import compute_sha256, register_dataset, create_import_job, run_import_job
 from app.services.reconciliation.engine import run_reconciliation
+from app.services.analytics_service import get_gateway_cost_analysis
 from app.services.vendor_compliance.synthetic_data import seed_vendor_compliance_data
 from app.services.vendor_compliance.compliance_engine import run_vendor_compliance_checks
 from app.api.v1.routers.reports import download_payments_csv, executive_summary
@@ -83,6 +84,13 @@ def test_four_workbook_imports_and_retry_are_idempotent(db):
         assert payout_rows and payout.net_amount == expected_net
     assert db.query(SourceRecord).count() == sum(row[0] for row in first_pass.values())
 
+    monthly = get_gateway_cost_analysis(db)["monthly_breakdowns"]
+    assert monthly
+    assert all(len(row["month"]) == 7 for row in monthly)
+    assert all(row["transaction_count"] > 0 for row in monthly)
+    assert all(row["gross_volume"] >= 0 and row["observed_fees"] >= 0 for row in monthly)
+    assert {row["gateway"] for row in monthly}.issubset({"gateway_a", "gateway_b"})
+
     for dataset_type, filename in WORKBOOKS:
         path = ROOT / "data" / filename
         dataset, is_new = register_dataset(db, filename, dataset_type, str(path), path.stat().st_size, compute_sha256(str(path)))
@@ -104,7 +112,9 @@ def test_reconciliation_and_csv_export_use_imported_records(db):
     result = run_reconciliation(db, run.id)
     db.commit()
     assert result.status == "completed"
-    assert result.total_records > 0
+    # Source rows across payments, Gateway A transactions, refunds, and
+    # Gateway B balance transactions: 475 + 414 + 13 + 731.
+    assert result.total_records == 1633
     assert result.matched_records > 0
     assert result.exception_count is not None
     persisted_exception_count = db.query(ReconciliationException).filter_by(run_id=run.id).count()
@@ -171,6 +181,38 @@ def test_pricing_scenario_rejects_currency_mismatch(db):
     assert result["alternative_estimated_fee"] is None
     assert any("currency" in item.lower() for item in result["limitations"])
     assert any("not independently verified" in item for item in result["limitations"])
+
+
+def test_pricing_scenario_requires_rule_country_and_method_context(db):
+    current = PricingRule(
+        id="country-method-rule", gateway="gateway_a", rule_name="Illustrative IN card",
+        currency="INR", country="IN", payment_method="card", fee_rate_pct=2,
+        is_illustrative=True, version="1",
+    )
+    alternative = PricingRule(
+        id="generic-alternative-rule", gateway="gateway_b", rule_name="Illustrative generic",
+        currency="INR", fee_rate_pct=1.5, is_illustrative=True, version="1",
+    )
+    db.add_all([current, alternative])
+    db.commit()
+
+    missing_context = create_savings_scenario(SavingsScenarioCreate(
+        name="Missing geography and method", current_gateway="gateway_a",
+        alternative_gateway="gateway_b", currency="INR", eligible_volume=1000,
+        current_pricing_rule_id=current.id, alternative_pricing_rule_id=alternative.id,
+    ), db=db)
+    assert missing_context["current_estimated_fee"] is None
+    assert missing_context["alternative_estimated_fee"] is not None
+    assert any("country" in item.lower() for item in missing_context["limitations"])
+    assert any("payment method" in item.lower() for item in missing_context["limitations"])
+
+    specified_context = create_savings_scenario(SavingsScenarioCreate(
+        name="Specified geography and method", current_gateway="gateway_a",
+        alternative_gateway="gateway_b", currency="INR", country="IN",
+        payment_method="card", eligible_volume=1000,
+        current_pricing_rule_id=current.id, alternative_pricing_rule_id=alternative.id,
+    ), db=db)
+    assert specified_context["current_estimated_fee"] is not None
 
 
 def test_vendor_seed_and_checks_preserve_evidence_gaps(db):

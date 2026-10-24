@@ -345,4 +345,73 @@ def get_gateway_cost_analysis(db: Session, gateway: Optional[str] = None) -> Dic
         "gateway_b_records": sum(r["transaction_count"] for r in result.get("gateway_b", [])),
         "currency_groups": len(result["breakdowns"]),
     }
+
+    # Month-wise observed costs, grouped by gateway and currency so unlike
+    # currencies are never added together. Use transaction timestamps from
+    # imported records, not upload/ingestion timestamps.
+    monthly: Dict[tuple, Dict[str, Any]] = {}
+    undated_rows = 0
+
+    def add_monthly(gateway_name: str, timestamp: Any, currency: str,
+                    fee_currency: Optional[str], gross: Any, fee: Any) -> None:
+        nonlocal undated_rows
+        if timestamp is None:
+            undated_rows += 1
+            return
+        month = timestamp.strftime("%Y-%m")
+        key = (month, gateway_name, currency, fee_currency or currency)
+        row = monthly.setdefault(key, {
+            "month": month,
+            "gateway": gateway_name,
+            "currency": currency,
+            "fee_currency": fee_currency or currency,
+            "transaction_count": 0,
+            "gross_volume": Decimal("0"),
+            "observed_fees": Decimal("0"),
+        })
+        row["transaction_count"] += 1
+        row["gross_volume"] += gross or Decimal("0")
+        row["observed_fees"] += fee or Decimal("0")
+
+    payment_rows = []
+    if not gateway or gateway == "gateway_a":
+        payment_rows = db.query(
+            Payment.transacted_at, Payment.currency, Payment.fee_currency,
+            Payment.gross_amount, Payment.fee,
+        ).filter(Payment.gateway == "gateway_a", Payment.status == "captured").all()
+    for row in payment_rows:
+        add_monthly("gateway_a", row.transacted_at, row.currency,
+                    row.fee_currency, row.gross_amount, row.fee)
+
+    gateway_b_rows = []
+    if not gateway or gateway == "gateway_b":
+        gateway_b_rows = db.query(
+            GatewayTransaction.transacted_at, GatewayTransaction.currency,
+            GatewayTransaction.gross_amount, GatewayTransaction.fee,
+        ).filter(
+            GatewayTransaction.gateway == "gateway_b",
+            GatewayTransaction.txn_type == "charge",
+        ).all()
+    for row in gateway_b_rows:
+        add_monthly("gateway_b", row.transacted_at, row.currency,
+                    row.currency, row.gross_amount, row.fee)
+
+    monthly_rows = []
+    for key in sorted(monthly):
+        row = monthly[key]
+        gross = row["gross_volume"]
+        fees = row["observed_fees"]
+        monthly_rows.append({
+            **row,
+            "gross_volume": float(gross),
+            "observed_fees": float(fees),
+            "effective_fee_rate_pct": round(float(fees / gross * 100), 4)
+                if gross and row["currency"] == row["fee_currency"] else None,
+        })
+    result["monthly_breakdowns"] = monthly_rows
+    result["monthly_data_note"] = (
+        f"Based on captured Gateway A payments and Gateway B charge rows; "
+        f"{undated_rows} eligible rows without transaction dates are omitted. "
+        "Fees are observed in imported records, not verified contract rates."
+    )
     return result

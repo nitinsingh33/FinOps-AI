@@ -38,7 +38,7 @@ export default function PricingPage() {
       <div className="page-header" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div>
           <h1 className="page-title">Pricing &amp; Savings</h1>
-          <p className="page-subtitle">Configure gateway pricing rules and model cost-saving scenarios</p>
+          <p className="page-subtitle">Compare configured gateway pricing assumptions for a specific currency, country and payment method</p>
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
           <button className="btn btn-secondary" onClick={() => setShowScenario(true)}>
@@ -48,6 +48,10 @@ export default function PricingPage() {
             <Plus size={15} /> Add Pricing Rule
           </button>
         </div>
+      </div>
+
+      <div style={{ padding: '12px 16px', marginBottom: 20, borderRadius: 10, background: 'var(--color-warning-dim)', border: '1px solid rgba(245,158,11,0.2)', color: 'var(--color-text-secondary)', fontSize: 13 }}>
+        Pricing rules are user-entered assumptions. New rules are marked <strong>Illustrative</strong> by default; scenario outputs are estimates, not confirmed contract rates or guaranteed savings. No sample rates are prefilled because the supplied data does not verify contract pricing.
       </div>
 
       {/* Pricing rules table */}
@@ -66,6 +70,7 @@ export default function PricingPage() {
                 <th>Rule Name</th>
                 <th>Gateway</th>
                 <th>Currency</th>
+                <th>Country</th>
                 <th>Payment Method</th>
                 <th>Fee Rate %</th>
                 <th>Fixed Fee</th>
@@ -76,10 +81,10 @@ export default function PricingPage() {
             </thead>
             <tbody>
               {isLoading ? (
-                <tr><td colSpan={9} style={{ textAlign: 'center', padding: 48 }}><span className="spinner spinner-lg" /></td></tr>
+                <tr><td colSpan={10} style={{ textAlign: 'center', padding: 48 }}><span className="spinner spinner-lg" /></td></tr>
               ) : pricingRules.length === 0 ? (
                 <tr>
-                  <td colSpan={9}>
+                  <td colSpan={10}>
                     <div className="empty-state">
                       <div className="empty-state-icon">💰</div>
                       <p className="empty-state-title">No pricing rules yet</p>
@@ -92,6 +97,7 @@ export default function PricingPage() {
                   <td style={{ fontWeight: 500 }}>{rule.rule_name}</td>
                   <td><span className="badge badge-purple">{rule.gateway}</span></td>
                   <td>{rule.currency ?? '—'}</td>
+                  <td>{rule.country ?? 'All / unspecified'}</td>
                   <td className="text-sm text-muted">{rule.payment_method ?? 'All'}</td>
                   <td className="td-amount">{rule.fee_rate_pct ? `${rule.fee_rate_pct}%` : '—'}</td>
                   <td className="td-amount">{rule.fixed_fee ?? '—'}</td>
@@ -141,6 +147,7 @@ function AddPricingRuleModal({ onClose, onSubmit, loading }: {
     rule_name: '',
     gateway: 'gateway_a',
     currency: 'INR',
+    country: '',
     payment_method: '',
     fee_rate_pct: '',
     fixed_fee: '',
@@ -156,6 +163,7 @@ function AddPricingRuleModal({ onClose, onSubmit, loading }: {
       rule_name: form.rule_name,
       gateway: form.gateway,
       currency: form.currency || undefined,
+      country: form.country || undefined,
       payment_method: form.payment_method || undefined,
       fee_rate_pct: form.fee_rate_pct ? parseFloat(form.fee_rate_pct) : undefined,
       fixed_fee: form.fixed_fee ? parseFloat(form.fixed_fee) : undefined,
@@ -192,6 +200,10 @@ function AddPricingRuleModal({ onClose, onSubmit, loading }: {
             <div className="form-group">
               <label className="form-label">Payment Method</label>
               <input className="form-input" placeholder="credit_card, upi…" value={form.payment_method} onChange={e => set('payment_method', e.target.value)} />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Country (optional)</label>
+              <input className="form-input" placeholder="IN, US…" value={form.country} onChange={e => set('country', e.target.value.toUpperCase())} />
             </div>
             <div className="form-group">
               <label className="form-label">Fee Rate %</label>
@@ -238,6 +250,8 @@ function SavingsScenarioModal({ rules, onClose, onSubmit, loading, result }: {
     current_gateway: 'gateway_a',
     alternative_gateway: 'gateway_b',
     currency: 'INR',
+    country: '',
+    payment_method: '',
     eligible_volume: '',
     current_pricing_rule_id: '',
     alternative_pricing_rule_id: '',
@@ -258,7 +272,7 @@ function SavingsScenarioModal({ rules, onClose, onSubmit, loading, result }: {
               <div className="ai-panel" style={{ marginBottom: 20 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                   <CheckCircle2 size={20} color="var(--color-success)" />
-                  <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-text-primary)' }}>Scenario: {result.name as string}</span>
+                  <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--color-text-primary)' }}>Scenario estimate (not confirmed savings): {result.name as string}</span>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16 }}>
                   {[
@@ -320,6 +334,14 @@ function SavingsScenarioModal({ rules, onClose, onSubmit, loading, result }: {
                   <input className="form-input" placeholder="INR" value={form.currency} onChange={e => set('currency', e.target.value)} />
                 </div>
                 <div className="form-group">
+                  <label className="form-label">Country / Geography</label>
+                  <input className="form-input" placeholder="IN, US…" value={form.country} onChange={e => set('country', e.target.value.toUpperCase())} />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Payment Method</label>
+                  <input className="form-input" placeholder="card, upi…" value={form.payment_method} onChange={e => set('payment_method', e.target.value)} />
+                </div>
+                <div className="form-group">
                   <label className="form-label">Eligible Volume</label>
                   <input className="form-input" type="number" placeholder="1000000" value={form.eligible_volume} onChange={e => set('eligible_volume', e.target.value)} />
                 </div>
@@ -340,7 +362,7 @@ function SavingsScenarioModal({ rules, onClose, onSubmit, loading, result }: {
               </div>
               <div style={{ marginTop: 24, display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
                 <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-                <button className="btn btn-primary" onClick={() => onSubmit({ ...form, eligible_volume: parseFloat(form.eligible_volume || '0'), current_pricing_rule_id: form.current_pricing_rule_id || undefined, alternative_pricing_rule_id: form.alternative_pricing_rule_id || undefined })} disabled={!form.name || !form.eligible_volume || loading}>
+                <button className="btn btn-primary" onClick={() => onSubmit({ ...form, eligible_volume: parseFloat(form.eligible_volume || '0'), country: form.country || undefined, payment_method: form.payment_method || undefined, current_pricing_rule_id: form.current_pricing_rule_id || undefined, alternative_pricing_rule_id: form.alternative_pricing_rule_id || undefined })} disabled={!form.name || !form.eligible_volume || loading}>
                   {loading ? <><span className="spinner" />Calculating…</> : <><Calculator size={15} />Calculate</>}
                 </button>
               </div>

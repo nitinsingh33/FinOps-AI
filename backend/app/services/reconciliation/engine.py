@@ -512,11 +512,15 @@ def run_reconciliation(db: Session, run_id: str) -> ReconciliationRun:
     for (curr, _), amount in exposure_by_source.items():
         amounts_by_currency[curr] = amounts_by_currency.get(curr, Decimal("0")) + amount
 
-    # Load totals
+    # Count every imported source row touched by reconciliation. The four
+    # source ledgers are separate records, so this is a row count, not a count
+    # of unique business payments.
     total_payments = db.query(Payment).filter_by(gateway="gateway_a").count()
+    total_gwa = db.query(GatewayTransaction).filter_by(gateway="gateway_a").count()
+    total_refunds = db.query(Refund).filter_by(gateway="gateway_a").count()
     total_gwb = db.query(GatewayTransaction).filter_by(gateway="gateway_b").count()
 
-    run.total_records = total_payments + total_gwb
+    run.total_records = total_payments + total_gwa + total_refunds + total_gwb
     run.matched_records = len(ctx.matched)
     run.unmatched_records = len([e for e in ctx.exceptions
                                   if e["category"] in (

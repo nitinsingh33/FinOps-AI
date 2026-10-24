@@ -144,7 +144,7 @@ export default function ReconciliationPage() {
               <div className="card-body">
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20 }}>
                   {[
-                    { label: 'Total Records', value: formatNumber(selectedRun.total_records) },
+                    { label: 'Source Rows Scanned', value: formatNumber(selectedRun.total_records) },
                     { label: 'Matched', value: formatNumber(selectedRun.matched_records), color: 'var(--color-success)' },
                     { label: 'Unmatched', value: formatNumber(selectedRun.unmatched_records), color: 'var(--color-warning)' },
                     { label: 'Exceptions', value: formatNumber(selectedRun.exception_count), color: 'var(--color-danger)' },
@@ -155,6 +155,11 @@ export default function ReconciliationPage() {
                     </div>
                   ))}
                 </div>
+                <p className="text-sm text-muted" style={{ marginTop: 16 }}>
+                  Source Rows Scanned counts input rows across all imported ledgers. Matched counts linked Gateway A payment/transaction pairs;
+                  Unmatched counts missing-side rows. Exceptions count issue flags and may apply to matched or unmatched rows, so these figures are not parts of one sum.
+                  Gateway B rows are checked separately for net amounts and payout links.
+                </p>
                 <div className="divider" />
                 <div style={{ display: 'flex', gap: 40 }}>
                   <div>
@@ -209,12 +214,12 @@ export default function ReconciliationPage() {
                           <tr><td colSpan={7} style={{ textAlign: 'center', padding: 32 }}><span className="spinner" /></td></tr>
                         ) : matchesData.items?.length === 0 ? (
                           <tr><td colSpan={7} style={{ textAlign: 'center', padding: 32, color: 'var(--color-text-muted)' }}>No matches</td></tr>
-                        ) : matchesData.items?.map((m: { id: string; match_method: string; confidence: number; payment_id: string | null; gateway_txn_id: string | null; amount_difference: string | null; currency: string | null }) => (
+                        ) : matchesData.items?.map((m: { id: string; match_method: string; confidence: string; payment_id: string | null; gateway_txn_id: string | null; amount_difference: string | null; currency: string | null }) => (
                           <tr key={m.id}>
                             <td className="td-mono">{m.id.slice(0, 10)}…</td>
                             <td><span className="badge badge-info">{m.match_method}</span></td>
                             <td>
-                              <span style={{ color: confidenceColor(m.confidence) }}>{((m.confidence ?? 0) * 100).toFixed(0)}%</span>
+                              <span style={{ color: confidenceColor(m.confidence) }}>{m.confidence}</span>
                             </td>
                             <td className="td-mono">{m.payment_id?.slice(0, 12) ?? '—'}</td>
                             <td className="td-mono">{m.gateway_txn_id?.slice(0, 12) ?? '—'}</td>
@@ -234,6 +239,9 @@ export default function ReconciliationPage() {
               {activeTab === 'exceptions' && (
                 <div className="card">
                   <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
+                    <p className="text-sm text-muted" style={{ padding: '12px 16px 0' }}>
+                      Amount at stake is shown only when the source records provide enough information to calculate it; “—” means unavailable, not zero.
+                    </p>
                     <table className="data-table">
                       <thead>
                         <tr>
@@ -241,21 +249,23 @@ export default function ReconciliationPage() {
                           <th>Severity</th>
                           <th>Gateway</th>
                           <th>Amount at Stake</th>
+                          <th>Difference</th>
                           <th>Status</th>
                           <th>Created</th>
                         </tr>
                       </thead>
                       <tbody>
                         {!exceptionsData ? (
-                          <tr><td colSpan={6} style={{ textAlign: 'center', padding: 32 }}><span className="spinner" /></td></tr>
+                          <tr><td colSpan={7} style={{ textAlign: 'center', padding: 32 }}><span className="spinner" /></td></tr>
                         ) : exceptionsData.items?.length === 0 ? (
-                          <tr><td colSpan={6} style={{ textAlign: 'center', padding: 32, color: 'var(--color-text-muted)' }}>No exceptions for this run</td></tr>
-                        ) : exceptionsData.items?.map((e: { id: string; category: string; severity: string; gateway: string | null; amount_at_stake: string | null; review_status: string; created_at: string }) => (
+                          <tr><td colSpan={7} style={{ textAlign: 'center', padding: 32, color: 'var(--color-text-muted)' }}>No exceptions for this run</td></tr>
+                        ) : exceptionsData.items?.map((e: { id: string; category: string; severity: string; gateway: string | null; currency: string | null; amount_at_stake: string | null; amount_difference: string | null; review_status: string; created_at: string }) => (
                           <tr key={e.id}>
                             <td style={{ textTransform: 'capitalize', fontSize: 12 }}>{e.category.replace(/_/g, ' ')}</td>
                             <td><span className={`badge ${severityBadge(e.severity)}`}>{e.severity}</span></td>
                             <td className="text-sm text-muted">{e.gateway ?? '—'}</td>
-                            <td className="td-amount">{e.amount_at_stake ?? '—'}</td>
+                            <td className="td-amount">{e.amount_at_stake == null ? '—' : `${e.currency ?? ''} ${e.amount_at_stake}`}</td>
+                            <td className="td-amount">{e.amount_difference == null ? '—' : `${e.currency ?? ''} ${e.amount_difference}`}</td>
                             <td><span className={`badge ${reviewBadge(e.review_status)}`}>{e.review_status.replace('_', ' ')}</span></td>
                             <td className="text-sm text-muted">{formatDate(e.created_at)}</td>
                           </tr>
@@ -293,9 +303,9 @@ function Pagination({ data, page, setPage }: { data: { total: number; page_size:
   )
 }
 
-function confidenceColor(c: number) {
-  if (c >= 0.9) return 'var(--color-success)'
-  if (c >= 0.7) return 'var(--color-warning)'
+function confidenceColor(c: string) {
+  if (c === 'high') return 'var(--color-success)'
+  if (c === 'medium') return 'var(--color-warning)'
   return 'var(--color-danger)'
 }
 

@@ -124,6 +124,7 @@ export interface PricingRule {
   rule_name: string
   payment_method: string | null
   currency: string | null
+  country?: string | null
   fee_rate_pct: string | null
   fixed_fee: string | null
   tax_on_fee_pct: string | null

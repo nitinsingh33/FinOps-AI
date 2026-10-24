@@ -31,6 +31,7 @@ export default function AnalyticsPage() {
   })
 
   const breakdowns = costsData?.breakdowns ?? []
+  const monthlyBreakdowns = costsData?.monthly_breakdowns ?? []
   const summary = costsData?.summary ?? {}
 
   // Prepare bar chart data: group by currency
@@ -81,6 +82,39 @@ export default function AnalyticsPage() {
           <option value="gateway_a">Gateway A</option>
           <option value="gateway_b">Gateway B</option>
         </select>
+      </div>
+
+      <div className="card mb-8">
+        <div className="card-header">
+          <span className="card-title"><LineChartIcon size={16} color="var(--color-accent)" /> Month-wise Gateway Costs</span>
+          <span className="text-sm text-muted">Observed imported data</span>
+        </div>
+        <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
+          {monthlyBreakdowns.length === 0 ? (
+            <div className="empty-state" style={{ padding: 32 }}>
+              <p className="empty-state-title">No dated payment records yet</p>
+              <p className="empty-state-desc">Monthly figures use transaction dates from captured payments and gateway charge rows.</p>
+            </div>
+          ) : (
+            <table className="data-table">
+              <thead><tr><th>Month</th><th>Gateway</th><th>Currency</th><th>Transactions</th><th>Gross Volume</th><th>Observed Fees</th><th>Effective Fee Rate</th></tr></thead>
+              <tbody>{monthlyBreakdowns
+                .filter((row: { gateway: string }) => !gateway || row.gateway === gateway)
+                .map((row: { month: string; gateway: string; currency: string; fee_currency: string; transaction_count: number; gross_volume: number; observed_fees: number; effective_fee_rate_pct: number | null }, i: number) => (
+                  <tr key={`${row.month}-${row.gateway}-${row.currency}-${row.fee_currency}-${i}`}>
+                    <td>{row.month}</td>
+                    <td><span className="badge badge-purple">{row.gateway}</span></td>
+                    <td>{row.currency}</td>
+                    <td>{row.transaction_count.toLocaleString('en-IN')}</td>
+                    <td className="td-amount">{row.currency} {row.gross_volume.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td className="td-amount">{row.fee_currency} {row.observed_fees.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</td>
+                    <td>{row.effective_fee_rate_pct == null ? 'Not comparable across currencies' : `${row.effective_fee_rate_pct.toFixed(3)}%`}</td>
+                  </tr>
+                ))}</tbody>
+            </table>
+          )}
+        </div>
+        <p className="text-sm text-muted" style={{ padding: '0 16px 16px' }}>{costsData?.monthly_data_note}</p>
       </div>
 
       <div className="grid-2 mb-8">

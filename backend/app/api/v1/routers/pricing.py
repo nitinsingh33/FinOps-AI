@@ -113,28 +113,29 @@ def create_savings_scenario(body: SavingsScenarioCreate, db: Session = Depends(g
         if rule is None:
             limitations.append(f"No {label} gateway pricing rule selected — fee is not estimated.")
             return False
+        eligible = True
         if rule.gateway != gateway_name:
             limitations.append(f"{label.title()} rule gateway does not match the selected gateway.")
-            return False
+            eligible = False
         if rule.currency and rule.currency != body.currency:
             limitations.append(f"{label.title()} rule currency {rule.currency} does not match scenario currency {body.currency}.")
-            return False
-        if rule.payment_method and body.payment_method and rule.payment_method != body.payment_method:
+            eligible = False
+        if rule.payment_method and rule.payment_method != body.payment_method:
             limitations.append(f"{label.title()} rule payment method does not match the scenario.")
-            return False
-        if rule.country and body.country and rule.country != body.country:
+            eligible = False
+        if rule.country and rule.country != body.country:
             limitations.append(f"{label.title()} rule country does not match the scenario.")
-            return False
+            eligible = False
         if rule.fixed_fee is not None and rule.fixed_fee_currency and rule.fixed_fee_currency != body.currency:
             limitations.append(f"{label.title()} fixed fee currency does not match scenario currency.")
-            return False
+            eligible = False
         if rule.effective_from and rule.effective_from.date() > scenario_time.date():
             limitations.append(f"{label.title()} pricing rule is not yet effective.")
-            return False
+            eligible = False
         if rule.effective_to and rule.effective_to.date() < scenario_time.date():
             limitations.append(f"{label.title()} pricing rule has expired.")
-            return False
-        return True
+            eligible = False
+        return eligible
 
     current_fee = _estimate_fee(volume, current_rule) if matches(current_rule, body.current_gateway, "current") else None
     alt_fee = _estimate_fee(volume, alt_rule) if matches(alt_rule, body.alternative_gateway, "alternative") else None
@@ -238,6 +239,7 @@ def _format_rule(rule: Optional[PricingRule]) -> Optional[dict]:
         "rule_name": rule.rule_name,
         "payment_method": rule.payment_method,
         "currency": rule.currency,
+        "country": rule.country,
         "fee_rate_pct": str(rule.fee_rate_pct) if rule.fee_rate_pct else None,
         "fixed_fee": str(rule.fixed_fee) if rule.fixed_fee else None,
         "tax_on_fee_pct": str(rule.tax_on_fee_pct) if rule.tax_on_fee_pct else None,
