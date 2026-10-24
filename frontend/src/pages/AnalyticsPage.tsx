@@ -63,7 +63,7 @@ export default function AnalyticsPage() {
   const gwaSettlement = settlData?.gateway_a_settlement_summary ?? []
 
   return (
-    <div className="page-wrapper">
+    <div className="page-wrapper analytics-page">
       <div className="page-header">
         <h1 className="page-title">Analytics</h1>
             <p className="page-subtitle">Observed fees from imported gateway records, grouped by currency. These are not verified contract rates.</p>
