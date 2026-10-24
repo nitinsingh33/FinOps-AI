@@ -196,10 +196,10 @@ class VendorInvoice(Base):
     is_blocked_itc_17_5: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     blocked_itc_category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # motor_vehicle, food_beverage, personal_consumption
     taxable_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
-    cgst_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal("0.00"), nullable=False)
-    sgst_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal("0.00"), nullable=False)
-    igst_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), default=Decimal("0.00"), nullable=False)
-    total_tax_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
+    cgst_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
+    sgst_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
+    igst_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
+    total_tax_amount: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     total_amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     currency: Mapped[str] = mapped_column(String(10), default="INR", nullable=False)
     tds_section: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # e.g. "194C", "194J", "195"
@@ -478,4 +478,60 @@ class VendorMasterCleanupItem(Base):
     __table_args__ = (
         Index("ix_vmc_vendor_id", "vendor_id"),
         Index("ix_vmc_issue_type", "issue_type"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Source PDF import batches and extracted invoice documents
+# ---------------------------------------------------------------------------
+
+class VendorDocumentImportBatch(Base):
+    """One safe import request for HR-provided invoice documents."""
+    __tablename__ = "vendor_document_import_batches"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    dataset_name: Mapped[str] = mapped_column(String(100), nullable=False, default="hr_sample_invoices")
+    source_kind: Mapped[str] = mapped_column(String(20), nullable=False)  # pdf, zip, mixed
+    total_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    parsed_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duplicate_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    review_required_files: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (Index("ix_vendor_doc_batches_created", "created_at"),)
+
+
+class VendorSourceDocument(Base):
+    """Extracted, source-traceable PDF facts; absent values remain null/statused."""
+    __tablename__ = "vendor_source_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
+    import_batch_id: Mapped[str] = mapped_column(
+        ForeignKey("vendor_document_import_batches.id"), nullable=False
+    )
+    source_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    storage_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_dataset: Mapped[str] = mapped_column(String(100), nullable=False, default="hr_sample_invoices")
+    document_type: Mapped[str] = mapped_column(String(30), nullable=False, default="unknown")
+    extraction_status: Mapped[str] = mapped_column(String(30), nullable=False)  # parsed, failed, review_required
+    mapping_status: Mapped[str] = mapped_column(String(30), nullable=False, default="review_required")
+    review_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    review_reasons: Mapped[List[str]] = mapped_column(json_type, nullable=False, default=list)
+    extracted_fields: Mapped[Dict[str, Any]] = mapped_column(json_type, nullable=False, default=dict)
+    extraction_error: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    vendor_id: Mapped[Optional[str]] = mapped_column(ForeignKey("vendor_masters.id"), nullable=True)
+    invoice_id: Mapped[Optional[str]] = mapped_column(ForeignKey("vendor_invoices.id"), nullable=True)
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_vendor_source_docs_vendor", "vendor_id"),
+        Index("ix_vendor_source_docs_invoice", "invoice_id"),
+        Index("ix_vendor_source_docs_batch", "import_batch_id"),
+        Index("ix_vendor_source_docs_dataset", "source_dataset"),
     )

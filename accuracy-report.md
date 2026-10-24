@@ -2,13 +2,15 @@
 
 ## Latest verification summary
 
-Latest results reported from the project environment (2026-10-24): backend full
-suite `venv\Scripts\python.exe -m pytest -q` — **70 passed**; focused vendor
-suite `venv\Scripts\python.exe -m pytest tests/integration/test_vendor_compliance.py -q`
-— **8 passed**; frontend TypeScript check (`tsc -b`) and production build
-(`vite build`) succeeded, with the existing large-chunk warning. These results
-have not been independently reproduced in the current audit environment. The
-dated entries below preserve the earlier verification history.
+The earlier project-environment report (2026-10-24) recorded **70 passed** in
+the full backend suite and **8 passed** in the focused vendor suite; frontend
+TypeScript and production build checks also succeeded. In the current audit
+environment on 2026-10-24, those checks were rerun: the full backend suite
+reported **74 passed**, the focused vendor-compliance plus PDF-ingestion suites
+reported **12 passed**, and `npm run build` completed its TypeScript and Vite
+production-build steps successfully. Vite emitted the existing large-chunk
+warning. The current audit test and build results were executed here; the dated
+historical results below remain preserved as originally reported.
 
 ## Supplied workbook import
 
@@ -215,3 +217,117 @@ See the README for startup commands and environment requirements.
   the documented fallback. Dispute treatment and statutory interest remain
   subject to human/legal review; the application does not calculate an
   authoritative interest liability.
+
+## HR Sample_Invoices PDF ingestion (2026-10-24)
+
+### Dataset inspection and actual import
+
+- `data/Sample_Invoices/` contained 50 one-page PDF documents. All 50 had
+  selectable text and were parsed; no OCR was needed. No OCR engine is
+  configured, so a scanned/empty PDF is recorded as extraction failure and
+  requires manual review.
+- The document types extracted were 38 tax invoices, 8 generic invoices, 1
+  bill of supply, 1 cash memo, 1 debit note, and 1 proforma invoice. The
+  currency fields were 48 INR, 1 USD, and 1 GBP. No amounts were converted
+  across currencies.
+- The imported PostgreSQL batch reported 50 total, 50 parsed, 0 failed, 0
+  duplicate, and 50 review-required documents. “Review required” includes
+  successfully parsed files whose legal/compliance evidence is incomplete; it
+  does not mean text extraction failed.
+- Mapping results were 38 mapped tax invoices and 12 staged review records.
+  The database has 49 HR-linked vendor records, 38 mapped invoices, 49
+  generated scorecards, 291 compliance exceptions, and 165 open vendor-master
+  cleanup findings. Scorecards were 40 `high_risk` and 9 `needs_attention`;
+  none were `compliant`. Risk scores include missing-evidence findings and do
+  not establish that a vendor breached tax law.
+- The scorecards did not have supportable amount-at-stake values, so those
+  values are unavailable rather than shown as zero. The exception CSV contains
+  engine findings plus document-review rows; one document can have several
+  review reasons.
+- PDFs are preserved by SHA-256 under the ignored runtime directory
+  `backend/data/uploads/vendor_documents/`; extracted fields carry status and
+  source evidence in `vendor_source_documents`. The supplied source folder
+  `data/Sample_Invoices/` is ignored by Git. Re-importing the same file hash is
+  counted as a duplicate and does not create another source document.
+
+### Implemented workflow and evidence boundaries
+
+- `POST /api/v1/vendor-compliance/documents/import` accepts multipart PDF files
+  or ZIP files. ZIP members are checked for traversal and processed in memory;
+  files are stored under hash-derived names. Limits are 20 MB per PDF, 100 MB
+  per batch, and 200 PDFs. Extraction failures are isolated per document, and
+  application error messages do not include invoice text.
+- The HR dataset selector filters vendors, scorecards, exceptions, checks,
+  cleanup findings, and CSV exports independently from the synthetic dataset.
+  The page shows source filenames, document type, extracted vendor/invoice/date/
+  currency/amount fields, mapping status, and review reasons.
+- Only explicit, required fields from tax invoices are mapped to existing
+  vendor/invoice models. Vendors are resolved by exact supplier GSTIN where
+  present; the fallback requires exact normalized legal name and address.
+  Name-only fuzzy merges are not performed. Non-tax document types and
+  incomplete/non-INR invoices stay staged for review.
+- The existing compliance engine generated scorecards and exceptions for the
+  mapped invoices and vendor records. Missing tax components remain null;
+  missing payment evidence does not create an overdue-payment conclusion.
+  Foreign invoices remain in their stated currencies and receive tax-team
+  review findings without an invented withholding rule.
+- Read-only API verification returned HTTP 200 for documents (50), HR vendors
+  (49), scorecards (49), exceptions (291), cleanup findings (165), and all four
+  CSV exports. CSV line counts were 50 for scorecards, 361 for exceptions, 166
+  for cleanup, and 51 for import review (each includes a header).
+- The API export routes are:
+  `/api/v1/vendor-compliance/reports/scorecards.csv?source=hr`,
+  `/api/v1/vendor-compliance/reports/exceptions.csv?source=hr`,
+  `/api/v1/vendor-compliance/reports/cleanup.csv?source=hr`, and
+  `/api/v1/vendor-compliance/documents/export.csv`.
+
+### Current execution evidence and limitations
+
+- The additive PostgreSQL migration `20261024_vendor_pdf_docs` applied
+  successfully with `alembic upgrade head` on the configured local database.
+  It adds source-document/import-batch tables and allows unknown invoice tax
+  components to remain null. It does not rewrite existing invoice rows.
+- Full backend test suite: `venv\Scripts\python.exe -m pytest -q
+  --disable-warnings` — **74 passed**. Focused vendor plus PDF-ingestion suite:
+  `venv\Scripts\python.exe -m pytest tests/integration/test_vendor_compliance.py
+  tests/integration/test_vendor_pdf_ingestion.py -q --disable-warnings` — **12
+  passed**. A `pytest-asyncio` fixture-loop deprecation warning appeared when
+  warnings were enabled; `--disable-warnings` hid warning output for these two
+  final result commands, not test failures.
+- The backend virtual environment has `pypdf==6.10.0` installed, and the PDF
+  tests ran directly with that dependency. It is also pinned in
+  `backend/requirements.txt` for setup in another environment.
+- `frontend`: `npm run build` — TypeScript (`tsc -b`) and production build
+  succeeded. Vite emitted the existing warning that the generated JavaScript
+  chunk exceeds 500 kB.
+- The additive migration was applied successfully with `alembic upgrade head`
+  to the configured PostgreSQL database. Read-only API checks against that
+  database returned the imported documents, scorecards, exceptions, cleanup
+  records, and CSV exports as listed above.
+- `git diff --check` completed with no whitespace errors. Git printed line
+  ending conversion warnings for modified files; these do not indicate diff
+  whitespace failures.
+- At the first actual import, SQLAlchemy development SQL echo printed bound
+  structured field values to the terminal. `backend/app/db/session.py` now
+  disables SQL echo, and no invoice text is sent to application logs. Protect
+  any terminal captures from that initial run according to the dataset policy.
+- The final UI/API smoke test read actual database rows and downloaded each CSV
+  endpoint successfully.
+
+### Remaining limitations
+
+- These PDFs identify themselves as fictitious training examples. They are not
+  the four payment-gateway spreadsheets and must not be represented as actual
+  supplier compliance evidence beyond the fields present in each PDF.
+- No GSTR-2B records, payment/bank evidence, TDS section/rate/credit timing,
+  challans, TDS returns, official GST/PAN status lookup, or authoritative MSME
+  verification accompanied the PDFs. Those checks remain explicit evidence
+  gaps or manual review, not confirmed compliance.
+- Tax invoice extraction uses text labels and is not a general-purpose OCR or
+  document-understanding model. Ambiguous formatting, unsupported document
+  layouts, and scanned PDFs require review. The mapped invoices are INR only;
+  foreign/USD/GBP invoices are preserved as source documents and are not
+  converted or pushed into INR calculations.
+- Tax rates, section mappings, reverse-charge determinations, blocked-credit
+  treatment, and legal conclusions still require authoritative evidence and
+  tax-team approval. The application does not claim a legal compliance audit.

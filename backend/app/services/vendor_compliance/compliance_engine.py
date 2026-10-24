@@ -34,7 +34,7 @@ from app.models.vendor_compliance import (
     ComplianceStatus, SeverityLevel,
     VendorComplianceException, VendorMaster, VendorInvoice,
     VendorPayment, GSTR2BRecord, TDSChallan, TDSReturnRecord,
-    VendorScorecard, VendorMasterCleanupItem, TaxRule, TDSChallan,
+    VendorScorecard, VendorMasterCleanupItem, VendorSourceDocument, TaxRule, TDSChallan,
 )
 from app.services.vendor_compliance.gst_checks import (
     validate_gstin_format, validate_pan_format, check_pan_gstin_consistency,
@@ -83,8 +83,11 @@ def _add_exception(
     calculation_breakdown: Optional[Dict] = None,
     evidence: Optional[Dict] = None,
     missing_information: Optional[List[str]] = None,
-    is_synthetic_warning: bool = True,
+    is_synthetic_warning: Optional[bool] = None,
 ) -> VendorComplianceException:
+    if is_synthetic_warning is None:
+        source_vendor = db.query(VendorMaster.is_synthetic).filter_by(id=vendor_id).scalar()
+        is_synthetic_warning = bool(source_vendor)
     exc = VendorComplianceException(
         id=_gen_id(),
         check_code=check_code,
@@ -129,7 +132,8 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
     # -----------------------------------------------------------------------
     # 1. Master data / GSTIN-PAN checks
     # -----------------------------------------------------------------------
-    gstin_valid, gstin_err = validate_gstin_format(vendor.gstin)
+    hr_foreign = vendor.vendor_type == "foreign" and not vendor.is_synthetic
+    gstin_valid, gstin_err = ((True, None) if hr_foreign else validate_gstin_format(vendor.gstin))
     if not gstin_valid:
         exc = _add_exception(
             db, vendor_id,
@@ -145,7 +149,7 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
         exceptions.append(exc)
         risk_score += SCORE_WEIGHTS["high"]
 
-    pan_valid, pan_err = validate_pan_format(vendor.pan)
+    pan_valid, pan_err = ((True, None) if hr_foreign and not vendor.pan else validate_pan_format(vendor.pan))
     if not pan_valid:
         exc = _add_exception(
             db, vendor_id,
@@ -160,7 +164,7 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
         exceptions.append(exc)
         risk_score += SCORE_WEIGHTS["high"]
 
-    if gstin_valid and pan_valid:
+    if not hr_foreign and gstin_valid and pan_valid:
         consistent, consistency_err = check_pan_gstin_consistency(vendor.pan, vendor.gstin)
         if not consistent:
             exc = _add_exception(
@@ -176,7 +180,7 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
             exceptions.append(exc)
             risk_score += SCORE_WEIGHTS["high"]
 
-    if not vendor.is_gstin_verified:
+    if not vendor.is_gstin_verified and not hr_foreign:
         exc = _add_exception(db, vendor_id, "MASTER_GSTIN_EVIDENCE_MISSING", "master_data", "medium",
             "GSTIN evidence not verified", "The GSTIN format is not proof of active registration.",
             "Verify registration status using an authoritative GST source.",
@@ -184,7 +188,7 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
         exceptions.append(exc)
         risk_score += 10
 
-    if not vendor.is_pan_verified:
+    if not vendor.is_pan_verified and (not hr_foreign or vendor.pan):
         exc = _add_exception(db, vendor_id, "MASTER_PAN_EVIDENCE_MISSING", "master_data", "medium",
             "PAN evidence not verified", "PAN format is not proof of operative status or ownership.",
             "Verify PAN and operative status against authoritative evidence.",
@@ -234,27 +238,35 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
 
     for inv in invoices:
         # GST treatment check
-        gst_ok, gst_err = validate_invoice_gst_treatment(
-            inv.supply_type, inv.cgst_amount, inv.sgst_amount, inv.igst_amount, inv.is_rcm
-        )
+        components = (inv.cgst_amount, inv.sgst_amount, inv.igst_amount)
+        components_known = all(value is not None for value in components)
+        if components_known:
+            gst_ok, gst_err = validate_invoice_gst_treatment(
+                inv.supply_type, *components, inv.is_rcm
+            )
+            gst_check_code = "GST_WRONG_TAX_TYPE"
+        else:
+            gst_ok, gst_err = False, "Tax component amounts are missing from the source invoice; tax treatment cannot be confirmed."
+            gst_check_code = "GST_TAX_BREAKUP_EVIDENCE_MISSING"
         if not gst_ok:
             exc = _add_exception(
                 db, vendor_id,
-                check_code="GST_WRONG_TAX_TYPE",
+                check_code=gst_check_code,
                 category="gst",
-                severity="high",
-                title=f"Incorrect GST type on invoice {inv.invoice_number}",
+                severity="high" if components_known else "medium",
+                title=(f"Incorrect GST type on invoice {inv.invoice_number}" if components_known else f"Tax breakup evidence missing for invoice {inv.invoice_number}"),
                 description=gst_err,
-                suggested_action="Request corrected invoice from vendor with correct CGST/SGST or IGST.",
+                suggested_action=("Request corrected invoice from vendor with correct CGST/SGST or IGST." if components_known else "Obtain a complete tax breakup before assessing invoice tax treatment."),
                 invoice_id=inv.id,
                 evidence={
                     "invoice_number": inv.invoice_number,
                     "supply_type": inv.supply_type,
-                    "cgst": str(inv.cgst_amount),
-                    "sgst": str(inv.sgst_amount),
-                    "igst": str(inv.igst_amount),
+                    "cgst": str(inv.cgst_amount) if inv.cgst_amount is not None else None,
+                    "sgst": str(inv.sgst_amount) if inv.sgst_amount is not None else None,
+                    "igst": str(inv.igst_amount) if inv.igst_amount is not None else None,
                 },
-                amount_at_stake=inv.total_tax_amount,
+                amount_at_stake=inv.total_tax_amount if components_known else None,
+                missing_information=["CGST, SGST/UTGST and IGST amounts"] if not components_known else None,
             )
             exceptions.append(exc)
             risk_score += SCORE_WEIGHTS["high"]
@@ -326,9 +338,20 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
             if cumulative >= inv.total_amount:
                 full_payment_date = pmt.payment_date
                 break
-        itc_status, itc_msg = check_itc_180_day_rule(
-            inv.invoice_date, full_payment_date, paid_total, inv.total_amount
-        )
+        if not vendor.is_synthetic and not inv_payments:
+            itc_status, itc_msg = "evidence_missing", None
+            exc = _add_exception(db, vendor_id, "GST_ITC_PAYMENT_EVIDENCE_MISSING", "gst", "medium",
+                f"Payment evidence unavailable for invoice {inv.invoice_number}",
+                "Invoice evidence does not establish whether or when payment occurred; no overdue conclusion was inferred.",
+                "Provide invoice-linked payment records before assessing the 180-day condition.",
+                invoice_id=inv.id, missing_information=["Invoice-linked payment dates and amounts"],
+                evidence={"invoice_number": inv.invoice_number, "invoice_date": str(inv.invoice_date)})
+            exceptions.append(exc)
+            risk_score += SCORE_WEIGHTS["medium"]
+        else:
+            itc_status, itc_msg = check_itc_180_day_rule(
+                inv.invoice_date, full_payment_date, paid_total, inv.total_amount
+            )
         if itc_status == "reversal_required":
             exc = _add_exception(
                 db, vendor_id,
@@ -369,7 +392,20 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                      "is_sample_rule": rule_obj.is_sample_rule, "version": rule_obj.version}
                     if rule_obj else None)
             if rule:
-                gst_total = inv.cgst_amount + inv.sgst_amount + inv.igst_amount
+                if any(value is None for value in (inv.cgst_amount, inv.sgst_amount, inv.igst_amount)):
+                    gst_total = None
+                else:
+                    gst_total = inv.cgst_amount + inv.sgst_amount + inv.igst_amount
+                if gst_total is None:
+                    exc = _add_exception(db, vendor_id, "TDS_GST_BASE_EVIDENCE_MISSING", "tds", "medium",
+                        f"TDS base cannot be determined for invoice {inv.invoice_number}",
+                        "The configured tax base depends on a complete invoice tax breakup.",
+                        "Obtain a complete invoice tax breakup before calculating the TDS base.",
+                        invoice_id=inv.id, missing_information=["Complete invoice tax breakup"],
+                        evidence={"invoice_number": inv.invoice_number})
+                    exceptions.append(exc)
+                    risk_score += SCORE_WEIGHTS["medium"]
+                    continue
                 tds_base = compute_tds_base(inv.total_amount, gst_total, rule["tax_base"])
                 expected_tds, above_threshold, _ = compute_expected_tds(
                     tds_base, rule["rate_pct"], rule["threshold_amount"]
@@ -420,6 +456,15 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                     evidence={"section": inv.tds_section, "invoice_date": str(inv.invoice_date)})
                 exceptions.append(exc)
                 risk_score += SCORE_WEIGHTS["medium"]
+        elif not vendor.is_synthetic:
+            exc = _add_exception(db, vendor_id, "TDS_ASSESSMENT_EVIDENCE_MISSING", "tds", "medium",
+                f"TDS assessment evidence unavailable for invoice {inv.invoice_number}",
+                "The invoice does not establish the applicable withholding section, timing, deduction, deposit or reporting.",
+                "Have the tax team determine the applicable approved rule and provide credit/payment, deduction, challan and return evidence.",
+                invoice_id=inv.id, missing_information=["Applicable approved TDS rule", "Credit/payment timing", "Deduction, challan and return evidence"],
+                evidence={"invoice_number": inv.invoice_number})
+            exceptions.append(exc)
+            risk_score += SCORE_WEIGHTS["medium"]
 
         if vendor.vendor_type == "foreign" and not inv.has_form_15ca_15cb:
             exc = _add_exception(db, vendor_id, "TDS_FOREIGN_DOCUMENTATION_UNCONFIRMED", "tds", "medium",
@@ -433,8 +478,28 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
             risk_score += SCORE_WEIGHTS["medium"]
 
         # MSME check per invoice
-        if vendor.msme_type != "non_msme":
+        if (vendor.is_synthetic and vendor.msme_type != "non_msme") or (not vendor.is_synthetic and vendor.msme_type in ("micro", "small", "unknown")):
             inv_payments_for_msme = payments_by_invoice.get(inv.id, [])
+            if not vendor.is_synthetic and vendor.msme_type == "unknown":
+                exc = _add_exception(db, vendor_id, "MSME_CLASSIFICATION_EVIDENCE_MISSING", "msme", "medium",
+                    f"MSME classification evidence unavailable for invoice {inv.invoice_number}",
+                    "The invoice does not establish whether the supplier is micro, small or medium; no 45-day deadline conclusion was applied.",
+                    "Verify current enterprise classification and Udyam evidence before applying a payment deadline.",
+                    invoice_id=inv.id, missing_information=["Verified micro/small/medium classification"],
+                    evidence={"invoice_number": inv.invoice_number, "udyam_number": vendor.udyam_number})
+                exceptions.append(exc)
+                risk_score += SCORE_WEIGHTS["medium"]
+                continue
+            if not vendor.is_synthetic and not inv_payments_for_msme:
+                exc = _add_exception(db, vendor_id, "MSME_PAYMENT_EVIDENCE_MISSING", "msme", "medium",
+                    f"MSME payment evidence unavailable for invoice {inv.invoice_number}",
+                    "Invoice evidence alone does not show MSME acceptance date or payment timing; no deadline conclusion was inferred.",
+                    "Verify MSME status, acceptance date and invoice-linked payment evidence before assessing the deadline.",
+                    invoice_id=inv.id, missing_information=["Verified MSME status", "Acceptance date", "Invoice-linked payments"],
+                    evidence={"invoice_number": inv.invoice_number, "invoice_date": str(inv.invoice_date)})
+                exceptions.append(exc)
+                risk_score += SCORE_WEIGHTS["medium"]
+                continue
             paid_msme = sum((p.gross_amount_paid for p in inv_payments_for_msme), Decimal("0"))
             cumulative_msme = Decimal("0")
             full_payment_date_msme = None
@@ -481,6 +546,16 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
                 )
                 exceptions.append(exc)
                 risk_score += SCORE_WEIGHTS["high"]
+
+    if hr_foreign and not invoices:
+        exc = _add_exception(db, vendor_id, "TDS_FOREIGN_REVIEW_EVIDENCE_MISSING", "tds", "medium",
+            "Foreign vendor document requires tax-team review",
+            "The supplied invoice identifies a foreign supplier, but it does not establish payment, tax residency, treaty eligibility or withholding treatment.",
+            "Have the tax team assess the payment facts and applicable approved rules, then attach supporting tax-residency and payment evidence.",
+            missing_information=["Payment/credit evidence", "Tax residency and treaty documentation", "Approved cross-border tax determination"],
+            evidence={"vendor_name": vendor.legal_name, "source_currency": "Review the linked source document"})
+        exceptions.append(exc)
+        risk_score += SCORE_WEIGHTS["medium"]
 
     # -----------------------------------------------------------------------
     # 3. TDS three-way reconciliation (at vendor level for outstanding deductions)
@@ -594,11 +669,13 @@ def run_vendor_compliance_checks(db: Session, vendor_id: str) -> VendorScorecard
         summary_reasons=summary_reasons,
         evidence_coverage={
             "invoices_checked": len(invoices),
+            "source_documents": db.query(VendorSourceDocument).filter_by(vendor_id=vendor_id).count(),
             "gst_exceptions": len(gst_excs),
             "tds_exceptions": len(tds_excs),
             "msme_exceptions": len(msme_excs),
             "master_data_exceptions": len(master_excs),
             "gstr2b_records_available": len(gstr2b_records),
+            "amount_at_stake_available": any(e.amount_at_stake is not None for e in exceptions),
         },
         recommended_actions=recommended_actions,
         last_assessed_at=datetime.now(timezone.utc),

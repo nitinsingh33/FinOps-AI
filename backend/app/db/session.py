@@ -16,7 +16,9 @@ engine = create_engine(
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
-    echo=settings.environment == "development",
+    # SQLAlchemy echo logs bound parameters, which can include uploaded invoice
+    # fields and other financial data. Keep SQL/bind logging disabled.
+    echo=False,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

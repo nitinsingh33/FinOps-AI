@@ -1,3 +1,6 @@
+Project root
+docker start finops-redis
+
 Terminal 1 - Backend
 cd backend
 .\venv\Scripts\Activate.ps1

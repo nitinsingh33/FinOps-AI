@@ -22,6 +22,8 @@ env/
 
 # Uploaded files
 data/uploads/
+backend/data/uploads/
+data/Sample_Invoices/
 data/exports/
 
 # Logs

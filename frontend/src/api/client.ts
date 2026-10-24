@@ -55,14 +55,21 @@ export const updatePricingRule = (id: string, body: unknown) => api.patch(`/pric
 export const createSavingsScenario = (body: unknown) => api.post('/savings-scenarios', body).then(r => r.data)
 
 // ─── Vendor compliance ────────────────────────────────────────
-export const fetchVendors = () => api.get('/vendor-compliance/vendors').then(r => r.data)
-export const fetchVendorScorecards = () => api.get('/vendor-compliance/scorecards').then(r => r.data)
-export const fetchVendorExceptions = () => api.get('/vendor-compliance/exceptions').then(r => r.data)
-export const fetchVendorCleanup = () => api.get('/vendor-compliance/master-cleanup').then(r => r.data)
+export const fetchVendors = (source?: string) => api.get('/vendor-compliance/vendors', { params: source ? { source } : {} }).then(r => r.data)
+export const fetchVendorScorecards = (source?: string) => api.get('/vendor-compliance/scorecards', { params: source ? { source } : {} }).then(r => r.data)
+export const fetchVendorExceptions = (source?: string) => api.get('/vendor-compliance/exceptions', { params: source ? { source } : {} }).then(r => r.data)
+export const fetchVendorCleanup = (source?: string) => api.get('/vendor-compliance/master-cleanup', { params: source ? { source } : {} }).then(r => r.data)
+export const fetchVendorDocuments = () => api.get('/vendor-compliance/documents').then(r => r.data)
+export const fetchVendorDocumentBatches = () => api.get('/vendor-compliance/documents/batches').then(r => r.data)
+export const importVendorDocuments = (files: File[]) => {
+  const data = new FormData()
+  files.forEach(file => data.append('files', file))
+  return api.post('/vendor-compliance/documents/import', data, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
+}
 export const fetchVendorRules = () => api.get('/vendor-compliance/tax-rules').then(r => r.data)
 export const seedVendorData = () => api.post('/vendor-compliance/seed').then(r => r.data)
-export const runVendorChecks = () => api.post('/vendor-compliance/checks/run').then(r => r.data)
-export const scanVendorMaster = () => api.post('/vendor-compliance/master-cleanup/scan').then(r => r.data)
+export const runVendorChecks = (source?: string) => api.post('/vendor-compliance/checks/run', null, { params: source ? { source } : {} }).then(r => r.data)
+export const scanVendorMaster = (source?: string) => api.post('/vendor-compliance/master-cleanup/scan', null, { params: source ? { source } : {} }).then(r => r.data)
 export const createVendorRule = (body: unknown) => api.post('/vendor-compliance/tax-rules', body).then(r => r.data)
 export const approveVendorRule = (id: string, approved_by: string) => api.post(`/vendor-compliance/tax-rules/${id}/approve`, { approved_by }).then(r => r.data)
 

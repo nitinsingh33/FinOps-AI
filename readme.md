@@ -45,9 +45,24 @@ This project provides a reviewable demo of those workflows using the supplied du
 
 ### Vendor GST/TDS Compliance
 
-The Vendor Compliance page uses synthetic example records to demonstrate vendor scorecards, exceptions, missing-evidence visibility, master-data cleanup findings, and versioned/effective-dated tax rules with explicit approval status. Compliance outcomes depend on available evidence and configured rules.
+The existing Vendor Compliance page supports both **Synthetic demo data** and **HR Sample_Invoices PDFs** in a dataset selector. These views are filtered separately; switching the selector does not mix HR and synthetic vendors.
 
-The application does not invent statutory rates or legal section mappings. The synthetic vendor records are not evidence about a real supplier.
+For the HR PDF dataset, select **HR Sample_Invoices PDFs**, choose the 50 supplied PDFs (or a ZIP containing them), and click **Import**. Selectable text is extracted with `pypdf`; PDFs without selectable text are marked failed/review-required because OCR is not configured. The importer retains source filenames, SHA-256 hashes, per-field extraction status/evidence, import batches, and the source PDFs under `backend/data/uploads/vendor_documents/`. `data/Sample_Invoices/` and runtime uploads are excluded from Git; do not commit supplied invoice files.
+
+After import, use **Run compliance checks** and **Scan vendor master**. The page shows parsed vendor/invoice fields, document type, mapping status, source filenames, scorecards, missing evidence, exceptions, and cleanup actions. Tax invoices are mapped only when the required identity, invoice, amount, currency, and state fields are explicitly extractable. Proformas, debit/credit notes, bills of supply, cash memos, generic invoices, non-INR invoices, and incomplete records remain in review unless safely mappable. A PDF is not proof of active GST registration, operative PAN, GSTR-2B presence, payment, TDS deduction/deposit/reporting, or MSME status. Missing evidence remains an exception; a high-risk score can reflect evidence gaps and is not proof of a tax breach.
+
+Use the HR view's buttons to export the **Scorecards CSV**, **Exception report CSV**, **Vendor cleanup CSV**, and the **Import review CSV**. The import review export lists document-level review reasons and source filenames. Exception amounts stay blank when the source data does not support quantification. The source invoices contain multiple currencies; the importer preserves them and only maps INR tax invoices into the current invoice model.
+
+The installed backend requirements include `pypdf`. After updating an existing environment, run `python -m pip install -r requirements.txt`. The local workflow uses the existing PostgreSQL database and an additive migration:
+
+```powershell
+cd backend
+alembic upgrade head
+```
+
+API routes are under `/api/v1/vendor-compliance`: `POST /documents/import` accepts multipart `files` fields containing PDFs or ZIPs; `GET /documents` and `/documents/batches` list import results; `GET /documents/export.csv` exports document review; `GET /reports/scorecards.csv?source=hr`, `/reports/exceptions.csv?source=hr`, and `/reports/cleanup.csv?source=hr` export the three deliverables. Import limits are 20 MB per PDF, 100 MB per batch, and 200 PDFs. ZIP paths are validated and members are processed without extracting archive paths to disk.
+
+The project does not invent statutory rates or legal section mappings. Invoice data is separate from synthetic demos, and tax conclusions require tax-team-approved rules plus the missing external evidence.
 
 ## Architecture
 
@@ -233,7 +248,8 @@ The original supplied workbooks are under `data/`. Uploading through the UI stor
 4. **Analytics:** show month-wise volume/count/observed fees. Explain that rates are currency-specific and fees are observed.
 5. **Pricing & Savings:** add two explicitly illustrative rules based on documented assumptions, then run a scenario with the same currency/geography/payment method. Present output as an estimate, not verified savings.
 6. **Reports:** open the one-page summary and export CSVs as needed.
-7. **Vendor Compliance:** seed synthetic demo records, run checks, and inspect scorecards, exceptions, missing evidence, cleanup findings, and tax-rule approval status.
+7. **Vendor Compliance (synthetic):** select **Synthetic demo data**, seed records, run checks, and inspect scorecards, exceptions, missing evidence, cleanup findings, and tax-rule approval status.
+8. **Vendor Compliance (HR PDFs):** select **HR Sample_Invoices PDFs**, import the supplied PDFs, inspect each source file and extracted fields, run compliance checks, scan the vendor master, then download the scorecard, exception, and cleanup CSVs. Review notes are expected because invoice PDFs do not include payment, GSTR-2B, challan, return, or authoritative registration evidence.
 
 ## API and documentation
 
@@ -248,6 +264,7 @@ Main route groups include:
 - `/pricing-rules`, `/savings-scenarios`
 - `/reports/executive-summary` and CSV download endpoints
 - `/vendor-compliance/vendors`, `/seed`, `/checks/run`, `/scorecards`, `/exceptions`, `/master-cleanup`, `/tax-rules`
+- `/vendor-compliance/documents/import`, `/documents`, `/documents/batches`, `/documents/export.csv`, and `/reports/{scorecards|exceptions|cleanup}.csv`
 
 ## Tests and build
 
@@ -269,7 +286,7 @@ A successful Vite build may still print a bundle-size warning; that warning is d
 
 ### Latest executed verification
 
-On 2026-10-24, the backend workflow integration suite was reported with **6 passed**; this is the workflow integration test count, not the full backend test-suite count. The latest reported full-suite result was **70 passed**, with the focused vendor compliance suite at **8 passed**. The frontend TypeScript project check and Vite production build also passed; Vite printed a large-chunk size warning. The clean PostgreSQL migration verification documented in [accuracy-report.md](accuracy-report.md) was executed on 2026-10-23. These results were reported from the project environment and have not been independently reproduced in the current audit environment. See [accuracy-report.md](accuracy-report.md) for the complete verification history.
+On 2026-10-24, the current audit ran the full backend suite: **74 passed**, including 4 PDF-ingestion tests. The focused vendor-compliance plus PDF-ingestion suites reported **12 passed**. Frontend `npm run build` passed its TypeScript and Vite production-build steps; Vite printed the existing large-chunk warning. The additive PostgreSQL migration applied successfully, and read-only API checks returned the imported HR documents, scorecards, exceptions, cleanup rows, and CSV downloads. The backend virtual environment used for these checks has `pypdf==6.10.0` installed; it is also pinned in `backend/requirements.txt`. Earlier reported test counts and their environment notes remain in [accuracy-report.md](accuracy-report.md).
 
 ## Security and data handling
 
@@ -285,7 +302,7 @@ On 2026-10-24, the backend workflow integration suite was reported with **6 pass
 - Gateway B payout totals are derived from imported balance rows grouped by payout ID. The supplied workbook does not include an independent bank transfer ledger for second-source settlement verification.
 - Actual observed gateway fees are not signed or independently verified contract rates. Savings estimates require user-configured pricing rules and are not guaranteed.
 - The application exposes reconciliation issue flags, but a flagged exception is not proof of fraud, overcharge, or root cause.
-- Vendor checks use synthetic records. Rule-based outcomes depend on evidence fields and approved rule configuration; legal interpretation requires qualified review.
+- Vendor checks can use either synthetic examples or the HR-provided training PDFs. HR invoice evidence is incomplete for payment, GSTR-2B, TDS deposit/reporting, and authoritative registration checks; scorecards show missing evidence and are not legal conclusions.
 - The app does not provide authentication or production deployment hardening. Do not expose a local development server to untrusted networks.
 - The build has a known large JavaScript bundle warning; the production build still completes.
 
