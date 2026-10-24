@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { AlertTriangle, Database, RefreshCw, ScanSearch, ShieldCheck, Upload, FileText } from 'lucide-react'
+import { AlertTriangle, Database, RefreshCw, ScanSearch, ShieldCheck, Upload, FileText, Info } from 'lucide-react'
 import {
   fetchVendors, fetchVendorExceptions, fetchVendorCleanup, fetchVendorRules,
   runVendorChecks, seedVendorData, scanVendorMaster, createVendorRule, approveVendorRule,
@@ -19,7 +19,7 @@ type TaxRule = { id: string; rule_code: string; tax_category: string; section_19
 export default function VendorCompliancePage() {
   const qc = useQueryClient()
   const [showRuleForm, setShowRuleForm] = useState(false)
-  const [source, setSource] = useState<'synthetic' | 'hr'>('synthetic')
+  const [source, setSource] = useState<'synthetic' | 'hr'>('hr')
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const vendors = useQuery({ queryKey: ['vendor-compliance', 'vendors', source], queryFn: () => fetchVendors(source) })
   const exceptions = useQuery({ queryKey: ['vendor-compliance', 'exceptions', source], queryFn: () => fetchVendorExceptions(source) })
@@ -39,47 +39,67 @@ export default function VendorCompliancePage() {
   const cleanupRows: CleanupItem[] = cleanup.data ?? []
   const ruleRows: TaxRule[] = rules.data ?? []
   const assessed = rows.filter(v => v.scorecard)
-  const inReview = issues.filter(e => e.missing_information.length > 0).length
+  const needingReview = rows.filter(v => !v.scorecard || v.scorecard.status !== 'compliant').length
+  const missingEvidence = issues.filter(e => e.missing_information.length > 0).length
+  const validationFindings = issues.filter(e => e.missing_information.length === 0).length
+  const latestBatch = batches.data?.[0] as { id: string; dataset_name: string; source_kind: string; total_files: number; parsed_files: number; failed_files: number; duplicate_files: number; review_required_files: number; created_at: string } | undefined
+  const documentCount = documents.data?.length ?? 0
   const error = [vendors.error, exceptions.error, cleanup.error, rules.error, documents.error, batches.error, seed.error, run.error, scan.error, createRule.error, approveRule.error, importDocs.error].find(Boolean) as Error | undefined
 
   return <div className="page-wrapper">
     <div className="page-header">
-      <h1 className="page-title">Vendor Compliance</h1>
-      <p className="page-subtitle">GST, TDS, MSME payment deadlines and vendor master evidence</p>
+      <h1 className="page-title">HR Invoice Compliance Review</h1>
+      <p className="page-subtitle">Review invoice evidence, identify missing compliance records, and prepare vendor scorecards and cleanup reports.</p>
     </div>
     <div className="card mb-8"><div className="card-body" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-      <label className="text-sm">Dataset <select className="form-select" value={source} onChange={e => setSource(e.target.value as 'synthetic' | 'hr')} style={{ display: 'inline-block', width: 220, marginLeft: 8 }}><option value="synthetic">Synthetic demo data</option><option value="hr">HR Sample_Invoices PDFs</option></select></label>
-      {source === 'synthetic' && <button className="btn btn-secondary" onClick={() => seed.mutate()} disabled={seed.isPending}><Database size={15} /> {seed.isPending ? 'Seeding…' : 'Load synthetic demo data'}</button>}
+      <label className="text-sm">Dataset <select className="form-select" value={source} onChange={e => setSource(e.target.value as 'synthetic' | 'hr')} style={{ display: 'inline-block', width: 240, marginLeft: 8 }}><option value="hr">HR Sample_Invoices PDFs</option><option value="synthetic">Synthetic demo / test data</option></select></label>
       <button className="btn btn-primary" onClick={() => run.mutate()} disabled={run.isPending || rows.length === 0}><RefreshCw size={15} /> {run.isPending ? 'Checking…' : 'Run compliance checks'}</button>
       <button className="btn btn-secondary" onClick={() => scan.mutate()} disabled={scan.isPending || rows.length === 0}><ScanSearch size={15} /> {scan.isPending ? 'Scanning…' : 'Scan vendor master'}</button>
-      <span className="text-muted text-sm">{source === 'hr' ? 'HR document evidence is unverified; “high risk” can reflect evidence gaps and does not prove a tax breach.' : 'Synthetic records are for demonstration only.'} Tax rules need approval before rate-based checks apply.</span>
+      <details style={{ position: 'relative' }}><summary className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', listStyle: 'none' }}><Database size={15} /> Developer Demo / Test Data</summary><div className="card" style={{ position: 'absolute', zIndex: 2, right: 0, top: '100%', minWidth: 260, padding: 12, boxShadow: 'var(--shadow-md)' }}><p className="text-sm text-muted" style={{ marginBottom: 10 }}>Synthetic records are separate from the HR invoice dataset.</p><button className="btn btn-secondary" onClick={() => seed.mutate()} disabled={seed.isPending}><Database size={15} /> {seed.isPending ? 'Loading…' : 'Load synthetic demo data'}</button></div></details>
     </div></div>
+    <section className="card mb-8" aria-label="Active dataset">
+      <div className="card-header"><span className="card-title"><FileText size={16} /> Active dataset: {source === 'hr' ? 'HR Sample_Invoices' : 'Synthetic Demo / Test Data'}</span><span className={`badge ${source === 'hr' ? (documentCount ? 'badge-success' : 'badge-warning') : 'badge-info'}`}>{source === 'hr' ? (documentCount ? 'HR records loaded' : 'No HR documents imported') : 'Synthetic only'}</span></div>
+      <div className="card-body" style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 220px', minWidth: 0 }}><div className="text-muted text-sm">Dataset source</div><strong>{source === 'hr' ? 'Sample_Invoices · HR-provided PDFs' : 'Vendor compliance demo seeder'}</strong></div>
+        <div style={{ flex: '1 1 180px', minWidth: 0 }}><div className="text-muted text-sm">Documents</div><strong>{source === 'hr' ? `${documentCount} PDF document${documentCount === 1 ? '' : 's'}` : 'No HR PDFs (synthetic records)'}</strong></div>
+        <div style={{ flex: '2 1 360px', minWidth: 0 }}><div className="text-muted text-sm">Latest import status</div><strong title={latestBatch?.created_at ?? ''}>{source === 'hr' ? (latestBatch ? `${latestBatch.parsed_files}/${latestBatch.total_files} parsed · ${latestBatch.failed_files} failed · ${latestBatch.duplicate_files} duplicate · ${latestBatch.review_required_files} need review` : 'No import batch yet') : 'Not applicable'}</strong></div>
+      </div>
+    </section>
+    {source === 'hr' && <section className="card mb-8"><div className="card-body" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+      <strong>Assignment deliverables</strong>
+      <a className="btn btn-primary" href="/api/v1/vendor-compliance/reports/scorecards.csv?source=hr">Vendor scorecard CSV</a>
+      <a className="btn btn-primary" href="/api/v1/vendor-compliance/reports/exceptions.csv?source=hr">Compliance exception report CSV</a>
+      <a className="btn btn-primary" href="/api/v1/vendor-compliance/reports/cleanup.csv?source=hr">Vendor master cleanup CSV</a>
+      <a className="btn btn-secondary" href="/api/v1/vendor-compliance/documents/export.csv">Import Review CSV</a>
+    </div></section>}
+    <section className="card mb-8"><div className="card-header"><span className="card-title"><Info size={16} /> How to read these results</span></div><div className="card-body text-sm text-muted">
+      Invoice PDFs provide invoice-level evidence only. GSTR-2B, payment/bank records, TDS challans/returns, and authoritative GST, PAN, or MSME evidence are not available unless separately supplied. “Needs review” and “Missing evidence” are not confirmed tax violations; rule findings still require human review and approved tax rules.
+    </div></section>
     {source === 'hr' && <>
       <section className="card mb-8"><div className="card-header"><span className="card-title"><Upload size={16} /> Import HR invoice PDFs</span></div><div className="card-body" style={{ display: 'grid', gap: 12 }}>
         <p className="text-sm text-muted">Choose one ZIP or multiple PDFs from <strong>Sample_Invoices</strong>. Original filenames and SHA-256 hashes are retained. Text extraction only; scanned PDFs are marked for review because OCR is not configured.</p>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}><input type="file" accept=".pdf,.zip,application/pdf,application/zip" multiple onChange={e => setSelectedFiles(Array.from(e.target.files ?? []))} /><button className="btn btn-primary" disabled={!selectedFiles.length || importDocs.isPending} onClick={() => importDocs.mutate(selectedFiles)}><Upload size={15} /> {importDocs.isPending ? 'Importing…' : `Import ${selectedFiles.length || ''} file(s)`}</button><a className="btn btn-secondary" href="/api/v1/vendor-compliance/documents/export.csv">Export import review CSV</a></div>
-        {importDocs.data && <p className="text-sm">Batch: {importDocs.data.batch_id} · PDFs: {importDocs.data.total_files} · parsed: {importDocs.data.parsed_files} · failed: {importDocs.data.failed_files} · duplicates: {importDocs.data.duplicate_files} · review: {importDocs.data.review_required_files}</p>}
+        {importDocs.data && <p className="text-sm">Batch: {importDocs.data.batch_id} · PDFs: {importDocs.data.total_files} · parsed: {importDocs.data.parsed_files} · failed: {importDocs.data.failed_files} · duplicates: {importDocs.data.duplicate_files} · review required: {importDocs.data.review_required_files}</p>}
         <div className="text-sm text-muted">{(batches.data ?? []).slice(0, 3).map((b: { id: string; created_at: string; total_files: number; parsed_files: number; failed_files: number; duplicate_files: number; review_required_files: number }) => <div key={b.id}>Batch {b.id.slice(0, 8)} · {b.total_files} files · parsed {b.parsed_files} · failed {b.failed_files} · duplicates {b.duplicate_files} · review {b.review_required_files} · {b.created_at}</div>)}</div>
       </div></section>
       <section className="card mb-8"><div className="card-header"><span className="card-title"><FileText size={16} /> Imported source documents ({documents.data?.length ?? 0})</span></div><div className="table-container"><table className="data-table"><thead><tr><th>Source file</th><th>Type</th><th>Extraction</th><th>Mapping</th><th>Vendor</th><th>Invoice / date</th><th>Currency / total</th><th>Review note</th></tr></thead><tbody>
-        {(documents.data ?? []).length === 0 ? <tr><td colSpan={8}>No HR documents imported yet.</td></tr> : (documents.data ?? []).map((d: { id: string; filename: string; document_type: string; extraction_status: string; mapping_status: string; fields: Record<string, { value: string | null }>; review_reasons: string[] }) => <tr key={d.id}><td>{d.filename}</td><td>{d.document_type.replace(/_/g, ' ')}</td><td>{d.extraction_status}</td><td>{d.mapping_status}</td><td>{d.fields.vendor_legal_name?.value ?? 'Unresolved'}</td><td>{d.fields.invoice_number?.value ?? '—'}<div className="text-muted text-sm">{d.fields.invoice_date?.value ?? 'Date missing'}</div></td><td>{d.fields.currency?.value ?? 'Unknown'} {d.fields.total_invoice_value?.value ?? 'amount missing'}</td><td>{d.review_reasons.join('; ')}</td></tr>)}
+        {(documents.data ?? []).length === 0 ? <tr><td colSpan={8}>No HR documents imported yet.</td></tr> : (documents.data ?? []).map((d: { id: string; filename: string; document_type: string; extraction_status: string; mapping_status: string; fields: Record<string, { value: string | null }>; review_reasons: string[] }) => <tr key={d.id}><td title={d.filename}>{d.filename}</td><td>{formatStatus(d.document_type)}</td><td><span className={`badge ${d.extraction_status === 'parsed' ? 'badge-success' : 'badge-warning'}`}>{formatStatus(d.extraction_status)}</span></td><td><span className={`badge ${d.mapping_status === 'mapped' ? 'badge-success' : 'badge-warning'}`}>{formatStatus(d.mapping_status)}</span></td><td>{d.fields.vendor_legal_name?.value ?? 'Unresolved'}</td><td>{d.fields.invoice_number?.value ?? '—'}<div className="text-muted text-sm">{d.fields.invoice_date?.value ?? 'Date missing'}</div></td><td>{d.fields.currency?.value ?? 'Unknown'} {d.fields.total_invoice_value?.value ?? 'amount missing'}</td><td>{d.review_reasons.join('; ') || 'No review note'}</td></tr>)}
       </tbody></table></div></section>
-      <div className="card mb-8"><div className="card-body" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}><a className="btn btn-secondary" href="/api/v1/vendor-compliance/reports/scorecards.csv?source=hr">Export scorecards CSV</a><a className="btn btn-secondary" href="/api/v1/vendor-compliance/reports/exceptions.csv?source=hr">Export exception report CSV</a><a className="btn btn-secondary" href="/api/v1/vendor-compliance/reports/cleanup.csv?source=hr">Export vendor cleanup CSV</a></div></div>
     </>}
     {error && <div className="card mb-8"><div className="card-body" style={{ color: 'var(--color-danger)' }}>API error: {error.message}. Confirm the backend is running and migrations are applied.</div></div>}
     <div className="stats-grid mb-8">
-      <Kpi icon={<ShieldCheck size={17} />} label="Vendors" value={rows.length} />
-      <Kpi icon={<RefreshCw size={17} />} label="Assessed" value={assessed.length} />
-      <Kpi icon={<AlertTriangle size={17} />} label="Exceptions" value={issues.length} />
-      <Kpi icon={<ScanSearch size={17} />} label="Missing evidence" value={inReview} />
+      <Kpi icon={<ShieldCheck size={17} />} label="Vendors needing review" value={needingReview} help="Vendors not yet assessed or whose scorecard is not marked compliant. This is a review queue, not a count of legal violations." />
+      <Kpi icon={<ScanSearch size={17} />} label="Findings with missing evidence" value={missingEvidence} help="Recorded findings that list required information as unavailable. Multiple findings may refer to one vendor or invoice." />
+      <Kpi icon={<AlertTriangle size={17} />} label="Validation findings" value={validationFindings} help="Recorded checks with no missing-information flag. These are review findings, not an official or final tax-compliance determination." />
+      <Kpi icon={<RefreshCw size={17} />} label="Vendors assessed" value={assessed.length} help="Vendors in this selected dataset that currently have a scorecard." />
     </div>
-    <section className="card mb-8"><div className="card-header"><span className="card-title">Vendor scorecards</span></div>
+    <section className="card mb-8"><div className="card-header"><span className="card-title">Vendor scorecards · {source === 'hr' ? 'HR invoices' : 'synthetic demo'}</span></div>
       <div className="table-container"><table className="data-table"><thead><tr><th>Vendor</th><th>GSTIN / PAN</th><th>MSME</th><th>Status</th><th>Risk</th><th>Exposure</th><th>Evidence</th></tr></thead>
-      <tbody>{vendors.isLoading ? <tr><td colSpan={7}>Loading vendor data…</td></tr> : rows.length === 0 ? <tr><td colSpan={7}>No vendors loaded. Use “Load synthetic demo data” or connect vendor records.</td></tr> : rows.map(v => <tr key={v.id}>
+      <tbody>{vendors.isLoading ? <tr><td colSpan={7}>Loading {source === 'hr' ? 'HR' : 'synthetic'} vendor data…</td></tr> : rows.length === 0 ? <tr><td colSpan={7}>{source === 'hr' ? 'No HR-linked vendors yet. Import the Sample_Invoices PDFs above.' : 'No synthetic records loaded. Open Developer Demo / Test Data to load examples.'}</td></tr> : rows.map(v => <tr key={v.id}>
         <td><strong>{v.legal_name}</strong><div className="text-muted text-sm">{v.vendor_code}{v.is_synthetic ? ' · synthetic' : ''}</div></td>
         <td className="text-sm">{v.gstin ?? 'GSTIN missing'}<div className="text-muted">{v.pan ?? 'PAN missing'}</div></td>
         <td>{v.msme_type}</td>
-        <td><span className={`badge ${statusClass(v.scorecard?.status)}`}>{v.scorecard?.status?.replace('_', ' ') ?? 'not assessed'}</span></td>
+        <td><span className={`badge ${statusClass(v.scorecard?.status)}`}>{v.scorecard?.status === 'needs_attention' ? 'Needs review' : v.scorecard?.status?.replace('_', ' ') ?? 'Not assessed'}</span></td>
         <td>{v.scorecard?.risk_score ?? '—'}</td>
         <td>{v.scorecard?.total_amount_at_stake !== null && v.scorecard?.total_amount_at_stake !== undefined ? `${v.scorecard.currency} ${Number(v.scorecard.total_amount_at_stake).toLocaleString()}` : 'Not quantifiable from available evidence'}</td>
         <td>{v.scorecard ? `${v.scorecard.evidence_coverage.source_documents ?? v.scorecard.evidence_coverage.invoices_checked ?? 0} documents` : '—'}</td>
@@ -117,9 +137,9 @@ export default function VendorCompliancePage() {
       </div>
     </section>
     <div className="grid-2">
-      <section className="card"><div className="card-header"><span className="card-title">Compliance exceptions</span></div><div className="card-body" style={{ display: 'grid', gap: 12 }}>
+      <section className="card"><div className="card-header"><span className="card-title">Compliance findings · {source === 'hr' ? 'HR invoices' : 'synthetic demo'}</span></div><div className="card-body" style={{ display: 'grid', gap: 12 }}>
         {issues.length === 0 ? <p className="text-muted">No checks have produced exceptions yet.</p> : issues.slice(0, 30).map(e => <article key={e.id} style={{ padding: 12, border: '1px solid var(--color-border)', borderRadius: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}><strong>{e.title}</strong><span className={`badge ${e.severity === 'high' ? 'badge-danger' : 'badge-warning'}`}>{e.severity}</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}><strong>{e.title}</strong><div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}><span className={`badge ${e.missing_information.length ? 'badge-warning' : 'badge-info'}`}>{e.missing_information.length ? 'Missing evidence' : 'Validation finding'}</span><span className={`badge ${e.severity === 'high' ? 'badge-danger' : 'badge-warning'}`}>{e.severity} severity</span></div></div>
           <p className="text-sm text-muted" style={{ marginTop: 6 }}>{e.description}</p>
           {(e.source_filename || e.invoice_number) && <p className="text-sm">Source: {e.source_filename ?? '—'}{e.invoice_number ? ` · Invoice ${e.invoice_number}` : ''}</p>}
           {e.amount_at_stake && <p className="text-sm">Exposure: {e.currency} {Number(e.amount_at_stake).toLocaleString()}</p>}
@@ -137,12 +157,15 @@ export default function VendorCompliancePage() {
   </div>
 }
 
-function Kpi({ icon, label, value }: { icon: React.ReactNode; label: string; value: number }) {
-  return <div className="stat-card"><div className="stat-icon">{icon}</div><div className="stat-label">{label}</div><div className="stat-value">{value}</div></div>
+function Kpi({ icon, label, value, help }: { icon: React.ReactNode; label: string; value: number; help: string }) {
+  return <div className="stat-card" title={help} aria-label={`${label}: ${value}. ${help}`}><div className="stat-icon">{icon}</div><div className="stat-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>{label}<Info size={12} aria-hidden="true" /></div><div className="stat-value">{value}</div></div>
 }
 function statusClass(status?: string) {
   if (status === 'compliant') return 'badge-success'
   if (status === 'high_risk') return 'badge-danger'
   if (status === 'needs_attention') return 'badge-warning'
   return 'badge-muted'
+}
+function formatStatus(status: string) {
+  return status.replace(/_/g, ' ').replace(/\b\w/g, character => character.toUpperCase())
 }
