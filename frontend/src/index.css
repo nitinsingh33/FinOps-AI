@@ -325,3 +325,88 @@ img { display: block; max-width: 100%; }
 .info-row:last-child { border-bottom: none; }
 .info-row-label { font-size: 12px; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; min-width: 140px; }
 .info-row-value { font-size: 13px; color: var(--color-text-primary); text-align: right; word-break: break-all; }
+
+/* Vendor Compliance workflow */
+.vendor-compliance-page { min-width: 0; }
+.vc-toolbar { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.vc-toolbar label { display: flex; align-items: center; gap: 8px; }
+.vc-toolbar .form-select { min-width: 220px; }
+.vc-source-summary { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(150px, .7fr) minmax(280px, 1.8fr) auto; gap: 18px; align-items: center; padding: 16px 20px; }
+.vc-source-summary > div { min-width: 0; }
+.vc-source-summary strong { display: block; overflow-wrap: anywhere; }
+.vc-active-source { margin-right: auto; }
+.vc-tabs { display: flex; gap: 6px; overflow-x: auto; border-bottom: 1px solid var(--color-border); margin-bottom: 20px; }
+.vc-tab { appearance: none; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--color-text-secondary); cursor: pointer; padding: 12px 16px; font: inherit; font-weight: 600; white-space: nowrap; }
+.vc-tab:hover, .vc-tab:focus-visible { color: var(--color-text-primary); background: rgba(255,255,255,.035); outline: none; }
+.vc-tab.active { border-bottom-color: var(--color-accent); color: var(--color-accent); }
+.vc-tab span { margin-left: 8px; border-radius: 999px; background: var(--color-bg-surface); color: var(--color-text-secondary); font-size: 11px; padding: 2px 7px; }
+.vc-panel { min-width: 0; }
+.vc-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.vc-metrics .stat-card { min-width: 0; padding: 16px 18px; }
+.vc-metrics .stat-label { display: flex; align-items: center; gap: 6px; }
+.vc-metrics .stat-value { font-size: 25px; }
+.vc-overview-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(300px, .8fr); gap: 16px; margin-bottom: 16px; }
+.vc-deliverables { display: flex; flex-wrap: wrap; gap: 8px; }
+.vc-how-to { padding: 12px 16px; }
+.vc-how-to > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 600; list-style: none; }
+.vc-how-to > summary::-webkit-details-marker { display: none; }
+.vc-how-to p { margin: 10px 0 0; max-width: 100ch; }
+.vc-import-body { display: grid; gap: 12px; }
+.vc-import-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.vc-scroll-table { max-height: 65vh; overflow: auto; }
+.vc-scroll-table thead { position: sticky; top: 0; z-index: 1; background: var(--color-bg-surface); }
+.vc-invoice-table, .vc-exception-table, .vc-cleanup-table { min-width: 1000px; table-layout: fixed; }
+.vc-invoice-table { min-width: 1200px; }
+.vc-invoice-table th:nth-child(1) { width: 16%; }
+.vc-invoice-table th:nth-child(2) { width: 10%; }
+.vc-invoice-table th:nth-child(3), .vc-invoice-table th:nth-child(4) { width: 9%; }
+.vc-invoice-table th:nth-child(5) { width: 14%; }
+.vc-invoice-table th:nth-child(6), .vc-invoice-table th:nth-child(7) { width: 11%; }
+.vc-invoice-table th:nth-child(8) { width: 14%; }
+.vc-invoice-table th:nth-child(9) { width: 6%; }
+.vc-truncate { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow-wrap: anywhere; }
+.vc-note-details > summary { cursor: pointer; list-style: none; }
+.vc-note-details > summary::-webkit-details-marker { display: none; }
+.vc-note-details > div { margin-top: 6px; overflow-wrap: anywhere; color: var(--color-text-secondary); }
+.vc-filters { display: flex; flex-wrap: wrap; gap: 10px; }
+.vc-filters .form-input { flex: 1 1 240px; }
+.vc-filters .form-select { flex: 0 1 220px; }
+.vc-exception-table th:nth-child(1) { width: 15%; }
+.vc-exception-table th:nth-child(2) { width: 15%; }
+.vc-exception-table th:nth-child(3) { width: 18%; }
+.vc-exception-table th:nth-child(4), .vc-exception-table th:nth-child(5) { width: 12%; }
+.vc-exception-table th:nth-child(6) { width: 12%; }
+.vc-exception-table th:nth-child(7) { width: 18%; }
+.vc-exception-table th:nth-child(8) { width: 8%; }
+.vc-detail-row td { white-space: normal; overflow-wrap: anywhere; background: var(--color-bg-surface); }
+.vc-detail-row p { margin: 8px 0; }
+.vc-inline-actions { display: flex; align-items: center; gap: 10px; }
+.vc-cleanup-table th:nth-child(1) { width: 18%; }
+.vc-cleanup-table th:nth-child(2) { width: 14%; }
+.vc-cleanup-table th:nth-child(3) { width: 18%; }
+.vc-cleanup-table th:nth-child(4), .vc-cleanup-table th:nth-child(5) { width: 25%; }
+.vc-rule-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 16px 0; }
+.vc-error { color: var(--color-danger); }
+.vc-developer-tools { margin-top: 24px; border-top: 1px solid var(--color-border); padding-top: 12px; color: var(--color-text-secondary); }
+.vc-developer-tools > summary { display: flex; align-items: center; gap: 8px; width: fit-content; cursor: pointer; list-style: none; font-size: 12px; }
+.vc-developer-tools > summary::-webkit-details-marker { display: none; }
+.vc-developer-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px 0 4px; }
+.vc-document-detail td { white-space: normal; background: var(--color-bg-surface); }
+.vc-document-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 18px; }
+.vc-document-fields > div { overflow-wrap: anywhere; }
+.vc-document-fields strong { display: block; color: var(--color-text-primary); font-size: 12px; }
+
+@media (max-width: 1000px) {
+  .vc-source-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vc-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vc-overview-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .vc-source-summary { grid-template-columns: 1fr; }
+  .vc-metrics { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .vc-metrics .stat-card { padding: 12px; }
+  .vc-toolbar { align-items: stretch; }
+  .vc-toolbar label { align-items: flex-start; flex-direction: column; }
+  .vc-toolbar .form-select { width: 100%; }
+  .vc-inline-actions { flex-wrap: wrap; justify-content: flex-end; }
+}
