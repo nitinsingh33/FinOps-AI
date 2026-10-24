@@ -1,396 +1,322 @@
-# FinOps AI — Payment Reconciliation & Gateway Cost Intelligence
+# FinOps AI
 
-> **Automated payment reconciliation, exception management, and gateway cost analytics for multi-gateway payment operations.**
+FinOps AI is a demo full-stack finance operations application for payment reconciliation, gateway fee analysis, savings scenarios, and vendor GST/TDS compliance workflows. It is built around masked or synthetic data and deterministic rules; AI-assisted exception explanations are optional.
 
-[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://reactjs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16+-4169E1?logo=postgresql&logoColor=white)](https://postgresql.org)
+> **Project status:** Core upload, reconciliation, analytics, pricing-scenario, reporting, and vendor-compliance workflows exist. See [Known limitations](#known-limitations) and [accuracy-report.md](accuracy-report.md) before treating outputs as operational or legal conclusions.
 
----
+## Contents
 
-## Overview
+- [Problem statement](#problem-statement)
+- [What the application does](#what-the-application-does)
+- [Architecture](#architecture)
+- [How the workflows work](#how-the-workflows-work)
+- [AI and automation](#ai-and-automation)
+- [Technology](#technology)
+- [Run locally on Windows](#run-locally-on-windows)
+- [Demo walkthrough](#demo-walkthrough)
+- [API and documentation](#api-and-documentation)
+- [Tests and build](#tests-and-build)
+- [Security and data handling](#security-and-data-handling)
+- [Known limitations](#known-limitations)
+- [Repository map](#repository-map)
+- [Licence](#licence)
 
-**FinOps AI** is a full-stack internal platform that automates the reconciliation of payment data across multiple payment gateways. It ingests raw gateway export files (Excel/CSV), normalizes records into a unified schema, runs deterministic reconciliation across datasets, surfaces exceptions with contextual categorization, and provides analytics on gateway fees and pricing over time — all through a polished dark-themed web interface.
+## Problem statement
 
-### Key Capabilities
+Payment operations teams receive separate exports from payment providers. Matching those records by hand makes it harder to find missing transactions, fee or currency differences, refunds, delayed settlements, and payout issues before closing the books. Gateway fee comparisons can also be misleading when currencies or payment methods are mixed, or when observed fees are mistaken for signed contract rates.
 
-| Capability | Description |
-|---|---|
-| **Multi-gateway ingestion** | Upload and parse Gateway A & Gateway B export formats |
-| **Automated reconciliation** | Match payments against transactions, settlements, and balance reports |
-| **Exception detection** | Categorize mismatches: fee discrepancies, missing settlements, duplicates, currency mismatches, and more |
-| **Exception review workflow** | Triage, annotate, and resolve exceptions with audit trail |
-| **Gateway cost analytics** | Track effective rates, fee trends, and per-gateway cost breakdowns |
-| **Pricing intelligence** | Model and compare gateway pricing structures |
-| **Report generation** | Export reconciliation summaries and exception reports |
-| **AI-augmented insights** | Optional LLM integration (OpenAI / Anthropic / Google) for anomaly narratives |
+A related vendor-compliance workflow demonstrates how GST, TDS, MSME deadlines, and vendor-master evidence can be checked and exceptions surfaced before close. Missing documents or unapproved tax rules must remain visible as gaps rather than being treated as proof of compliance.
 
----
+This project provides a reviewable demo of those workflows using the supplied dummy payment workbooks and synthetic vendor records.
+
+## What the application does
+
+### Payment Intelligence
+
+| Workflow | What it does | Where to find it |
+|---|---|---|
+| Operational overview | Shows payment/import totals, recent reconciliation runs, and recent exceptions from the API | **Dashboard** |
+| Dataset import | Accepts Excel/CSV gateway exports, records import jobs, validates and normalizes rows, and preserves source provenance | **Data Uploads** |
+| Reconciliation | Matches Gateway A payment and transaction records; checks unmatched records, currencies, fees, net amounts, refunds, settlements, and Gateway B balance/payout fields | **Reconciliation** |
+| Exception review | Lists issue flags with severity, source links, available amounts/differences, review status, notes, and audit history | **Exceptions** |
+| Monthly cost view | Groups captured Gateway A payments and Gateway B charge rows by transaction month, gateway, and currency; shows count, gross volume, observed fees, and a comparable rate where possible | **Analytics** |
+| Pricing scenarios | Estimates fees using explicitly configured pricing assumptions, scoped to currency and optionally country/payment method | **Pricing & Savings** |
+| Exports and summary | Provides payment, transaction, refund, and exception CSV exports plus a printable one-page executive summary | **Reports** |
+
+### Vendor GST/TDS Compliance
+
+The Vendor Compliance page uses synthetic example records to demonstrate vendor scorecards, exceptions, missing-evidence visibility, master-data cleanup findings, and versioned/effective-dated tax rules with explicit approval status. Compliance outcomes depend on available evidence and configured rules.
+
+The application does not invent statutory rates or legal section mappings. The synthetic vendor records are not evidence about a real supplier.
 
 ## Architecture
 
-```
-FinOps-AI/
-├── backend/                   # FastAPI Python backend
-│   ├── app/
-│   │   ├── api/v1/routers/    # REST endpoints (uploads, jobs, reconciliation,
-│   │   │                      #   exceptions, analytics, pricing, reports, health)
-│   │   ├── core/              # Configuration (Pydantic Settings v2)
-│   │   ├── db/                # SQLAlchemy session & Base
-│   │   ├── models/            # ORM models (PostgreSQL + JSONB)
-│   │   ├── schemas/           # Pydantic request/response schemas
-│   │   ├── services/          # Business logic layer
-│   │   ├── utils/             # Helpers (parsing, hashing, formatting)
-│   │   ├── workers/           # Celery background tasks
-│   │   └── main.py            # App entry point
-│   ├── alembic/               # Database migrations
-│   └── requirements.txt
-│
-├── frontend/                  # React + TypeScript + Vite
-│   └── src/
-│       ├── api/               # Typed API client (TanStack Query)
-│       ├── components/
-│       │   ├── charts/        # Recharts-based visualizations
-│       │   ├── layout/        # Sidebar, navigation shell
-│       │   ├── tables/        # Data tables with sorting & filtering
-│       │   └── ui/            # Reusable design-system components
-│       ├── hooks/             # Custom React hooks
-│       ├── pages/             # Route-level page components
-│       ├── store/             # Global state (Zustand)
-│       └── types/             # TypeScript interfaces
-│
-├── data/                      # Sample gateway export files
-├── docs/                      # Extended documentation
-├── scripts/                   # Utility scripts (profiling, seeding)
-└── .env.example               # Environment variable template
+```mermaid
+flowchart LR
+    Browser[React + TypeScript UI] -->|REST /api/v1| API[FastAPI]
+    API --> Services[Import, reconciliation, analytics, pricing, reports, compliance]
+    Services --> ORM[SQLAlchemy]
+    ORM --> DB[(PostgreSQL)]
+    API -->|queued import/reconciliation work| Redis[(Redis broker)]
+    Redis --> Worker[Celery worker]
+    Worker --> Services
+    API -. optional exception explanation .-> AI[Configured AI provider]
+    Uploads[Excel / CSV files] --> API
+    API --> Storage[backend/data/uploads]
+    Storage --> Services
 ```
 
-### Technology Stack
+The API and Celery worker share the database configuration and application services. Redis is used for asynchronous jobs. If the worker/broker is unavailable, some API paths attempt a synchronous fallback; for reliable background processing, keep Redis and the worker running.
 
-**Backend**
-- **FastAPI 0.115** — async REST API with automatic OpenAPI docs
-- **SQLAlchemy 2.0** — async ORM with typed `Mapped` columns
-- **PostgreSQL 16+** — primary store; uses `JSONB` for gateway-specific metadata
-- **Alembic** — schema migrations
-- **Celery + Redis** — background processing of large file imports
-- **Pydantic v2 / pydantic-settings** — validation and config management
-- **structlog** — structured JSON logging with request IDs
-- **pandas + openpyxl** — Excel/CSV parsing and normalization
+Reconciliation values are calculated from normalized database records. The UI reads API responses; dashboard totals are not intended to be hardcoded demo metrics. Uploaded files are retained separately from normalized database rows.
 
-**Frontend**
-- **React 18 + TypeScript** — component-driven UI
-- **Vite** — fast dev server with API proxy to backend
-- **TanStack Query (React Query)** — server state, caching, background refetch
-- **Zustand** — lightweight global state
-- **Recharts** — chart library for analytics and dashboards
-- **React Router v6** — client-side routing
+## How the workflows work
 
----
+### Import and reconciliation
 
-## Pages & Features
+1. Upload the supplied workbook and select its dataset type.
+2. The import job parses source rows, records warnings/errors/duplicates, and saves normalized rows with source provenance.
+3. Trigger a reconciliation run.
+4. Review **Matches** and **Exceptions** for that run. Exceptions are issue flags and may overlap matched or unmatched records.
 
-| Route | Page | Description |
-|---|---|---|
-| `/dashboard` | **Dashboard** | KPI cards, reconciliation summary, recent activity, gateway health |
-| `/uploads` | **Uploads** | Drag-and-drop file upload, dataset type selection, import history |
-| `/reconciliation` | **Reconciliation** | Run reconciliation, view run history, match statistics |
-| `/exceptions` | **Exceptions** | Filtered exception list, category drill-down, review workflow |
-| `/analytics` | **Analytics** | Fee trends, volume by gateway, effective rate charts |
-| `/pricing` | **Pricing** | Gateway pricing models, fee-rate comparison |
-| `/reports` | **Reports** | Generate & download reconciliation and exception reports |
-| `/vendor-compliance` | **Vendor Compliance** | Vendor checks, scorecards, exceptions, master cleanup, and reviewed tax rules |
+The supplied September 2026 workbooks are:
 
----
+| Workbook | Dataset | Rows verified |
+|---|---|---:|
+| `GatewayA_payments_Sep26_dummy.xlsx` | Gateway A payments | 475 |
+| `GatewayA_transactions_Sep26_dummy.xlsx` | Gateway A transactions | 414 |
+| `GatewayA_refunds_Sep26_dummy.xlsx` | Gateway A refunds | 13 |
+| `GatewayB_Sep26_dummy.xlsx` | Gateway B balance transactions | 731 |
 
-## Database Schema
+These counts total **1,633 source rows**. They are not expected to equal the sum of matched, unmatched, and exception counts:
 
-```
-UploadedDataset ──< ImportJob
-                         │
-                         ├──< GatewayAPayment
-                         ├──< GatewayATransaction
-                         ├──< GatewayARefund
-                         └──< GatewayBBalanceRecord
+- **Source Rows Scanned** counts imported ledger rows included by the run.
+- **Matched** counts linked Gateway A payment/transaction pairs.
+- **Unmatched** counts records missing a corresponding side.
+- **Exceptions** counts issue flags; multiple flags can relate to the same record, and flags can overlap matched or unmatched records.
 
-ReconciliationRun ──< ReconciliationMatch
-                  ──< ReconciliationException ──< ExceptionNote
+See [accuracy-report.md](accuracy-report.md) for import warnings, retry behavior, matching assumptions, and verification history.
 
-GatewayPricingModel
-```
+### Monthly metrics and observed fees
 
-**Design principles:**
-- UUID primary keys on all tables
-- `Decimal(20, 6)` for all monetary values — no floating-point rounding errors
-- Explicit `currency` column alongside every monetary field
-- `JSONB` for gateway-specific metadata that does not require relational querying
-- Provenance links — every normalized record traces back to its source dataset
-- Audit timestamps (`created_at`, `updated_at`) on every table
+Analytics groups records by their transaction timestamp, gateway, and currency. It does not add amounts across currencies. The monthly view uses captured Gateway A payments and Gateway B charge rows; records without a transaction timestamp are omitted and the UI reports that omission.
 
-**Exception categories detected:**
+Fees from uploaded exports are **observed fees**, not verified contract terms. If fee currency differs from transaction currency, a blended effective fee rate is not calculated.
 
-| Category | Description |
+### Pricing and savings scenarios
+
+Pricing rules are entered by the user; newly added rules default to **Illustrative**. A scenario estimates fees for a volume using the selected rules and context. If a rule's currency, country, payment method, effective date, or fixed-fee currency does not fit the scenario, that estimate is left unavailable and the limitation is shown.
+
+The repository does not preload made-up contract rates. Scenario output is an estimate—not guaranteed savings, a recommendation backed by a signed contract, or an independently verified quote. Use only approved pricing evidence for business decisions.
+
+### Executive report
+
+The **Reports** page links to a printable executive summary generated from persisted database records. It also provides CSV exports. Review the report's currency and evidence notes before sharing it.
+
+## AI and automation
+
+- Import normalization, reconciliation matching, metric aggregation, pricing arithmetic, and vendor checks are deterministic application code.
+- AI is **disabled by default** (`AI_ENABLED=false`). When unavailable, exception investigation returns a clearly labeled deterministic fallback.
+- Implemented live AI provider calls are OpenAI and Anthropic. Provider credentials are never committed to the repository.
+- To enable an AI provider, the operator must set `AI_ENABLED=true`, configure the matching key, and explicitly set `AI_RETENTION_APPROVED=true`. That flag is an operator confirmation; it does not configure retention at the provider. Confirm the selected provider's retention settings separately before sending any data.
+- Exception evidence packets omit customer email, phone, and card details. AI output is labeled and schema-validated; it does not update financial records, mark payments settled, or decide compliance.
+- Do not send real financial or vendor data through an unapproved provider or environment.
+
+## Technology
+
+| Area | Main components |
 |---|---|
-| `missing_gateway_txn` | Payment record has no matching gateway transaction |
-| `missing_payment` | Gateway transaction has no corresponding payment record |
-| `unmatched_refund` | Refund cannot be linked to an original payment |
-| `refund_amount_mismatch` | Refund amount differs from expected |
-| `fee_discrepancy` | Gateway-charged fee deviates from contracted rate |
-| `tax_discrepancy` | Tax amount does not match expected calculation |
-| `net_amount_mismatch` | Net settlement differs from gross minus fees |
-| `missing_settlement` | Transaction was processed but never settled |
-| `unsettled_transaction` | Transaction beyond expected settlement window |
-| `settlement_delay` | Settlement occurred outside SLA window |
-| `duplicate_record` | Same transaction appears more than once |
-| `currency_mismatch` | Currency on payment and gateway record differs |
-| `ambiguous_match` | Multiple possible matches with low confidence |
+| Backend API | Python, FastAPI, Pydantic Settings |
+| Database and migrations | PostgreSQL, SQLAlchemy 2, Alembic |
+| Background jobs | Celery, Redis |
+| Workbook ingestion | pandas, openpyxl, xlrd |
+| Frontend | React 19, TypeScript, Vite |
+| Data fetching and charts | TanStack Query, Recharts |
+| Optional AI investigation | OpenAI or Anthropic SDKs, disabled unless explicitly enabled |
 
----
+Pinned backend dependencies are in [backend/requirements.txt](backend/requirements.txt); frontend dependencies/scripts are in [frontend/package.json](frontend/package.json).
 
-## Quick Start
+## Run locally on Windows
 
 ### Prerequisites
 
-| Requirement | Version |
-|---|---|
-| Python | 3.12+ |
-| Node.js | 18+ |
-| PostgreSQL | 15+ |
-| Redis | 7+ (for Celery background tasks) |
+- Python 3.12 or newer
+- Node.js 20.19+ or 22.12+ (Vite 8 requirement)
+- PostgreSQL running locally
+- Redis 7+ and Docker only if you want background jobs through Celery
 
-### 1. Clone the Repository
+### 1. Prepare PostgreSQL
 
-```bash
-git clone https://github.com/your-org/FinOps-AI.git
-cd FinOps-AI
-```
-
-### 2. Configure Environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your credentials. At minimum, update the database connection:
-
-```env
-DATABASE_URL=postgresql+psycopg2://YOUR_USER:YOUR_PASSWORD@localhost:5432/finops_ai
-ASYNC_DATABASE_URL=postgresql+asyncpg://YOUR_USER:YOUR_PASSWORD@localhost:5432/finops_ai
-REDIS_URL=redis://localhost:6379/0
-```
-
-### 3. Set Up the Database
-
-Create the PostgreSQL database and user (run as a PostgreSQL superuser):
+Create a local database and user in pgAdmin or `psql`. For example, in a PostgreSQL query window:
 
 ```sql
-CREATE USER finops WITH PASSWORD 'finops_secret';
+CREATE USER finops WITH PASSWORD 'choose-a-local-password';
 CREATE DATABASE finops_ai OWNER finops;
-GRANT ALL PRIVILEGES ON DATABASE finops_ai TO finops;
 ```
 
-Run migrations:
+Use your own local password. In `backend/.env`, set `DATABASE_URL` to match your PostgreSQL username, password, host, port, and database. For the example above:
 
-```bash
+```dotenv
+DATABASE_URL=postgresql+psycopg2://finops:YOUR_URL_ENCODED_PASSWORD@localhost:5432/finops_ai
+```
+
+If a `backend/.env` already exists, edit it; do not overwrite it. The root `.env.example` is a template. Keep `.env` files and credentials private.
+
+### 2. Install backend dependencies and migrate
+
+Open a VS Code terminal at the repository root and run:
+
+```powershell
 cd backend
-pip install -r requirements.txt
+py -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 alembic upgrade head
 ```
 
-The current migration head includes the initial payment/vendor schema and a
-follow-up migration allowing versioned tax rules. For a clean PostgreSQL
-database, create an empty database and run `alembic upgrade head` before starting
-the API. The supplied workbooks can then be imported through the Uploads page or
-with `python scripts/import_all.py` from `backend/`.
+If PowerShell blocks environment activation, run `.\venv\Scripts\alembic.exe upgrade head`. The `alembic upgrade head` command works after the environment is activated.
 
-### 4. Start the Backend
+### 3. Start the API
 
-```bash
+Keep this terminal open:
+
+```powershell
 cd backend
+.\venv\Scripts\Activate.ps1
 uvicorn app.main:app --reload --port 8000
 ```
 
-- Swagger UI → http://localhost:8000/api/docs
-- ReDoc → http://localhost:8000/api/redoc
+API health: <http://localhost:8000/health/ready>
+Interactive API docs: <http://localhost:8000/api/docs>
 
-### 5. Start the Frontend
+### 4. Start the frontend
 
-```bash
+Open a second VS Code terminal:
+
+```powershell
 cd frontend
 npm install
 npm run dev
 ```
 
-Application → **http://localhost:5173**
+Open <http://localhost:5173>.
 
-### 6. (Optional) Start Celery Worker
+### 5. Optional: start Redis and the Celery worker
 
-Required for background processing of large file imports:
+For background import/reconciliation tasks, start Redis. If Docker is installed and port `6379` is free:
 
-```bash
-cd backend
-celery -A app.workers.celery_app worker --loglevel=info
-```
-
----
-
-## API Reference
-
-All endpoints are prefixed with `/api/v1`. Interactive docs at `/api/docs` when the backend is running.
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Health check |
-| `POST` | `/api/v1/uploads/` | Upload a gateway dataset file |
-| `GET` | `/api/v1/uploads/` | List uploaded datasets |
-| `GET` | `/api/v1/jobs/` | List import jobs |
-| `GET` | `/api/v1/jobs/{id}` | Get import job status |
-| `POST` | `/api/v1/reconciliation/runs` | Trigger a reconciliation run |
-| `GET` | `/api/v1/reconciliation/runs` | List reconciliation runs |
-| `GET` | `/api/v1/reconciliation/runs/{id}` | Get run details and match statistics |
-| `GET` | `/api/v1/exceptions/` | List exceptions (filterable by category, status, gateway) |
-| `PATCH` | `/api/v1/exceptions/{id}` | Update exception review status |
-| `POST` | `/api/v1/exceptions/{id}/notes` | Add a note to an exception |
-| `GET` | `/api/v1/analytics/fees` | Fee trend analytics |
-| `GET` | `/api/v1/analytics/volume` | Transaction volume by gateway |
-| `GET` | `/api/v1/pricing/` | List gateway pricing models |
-| `GET` | `/api/v1/reports/` | List available reports |
-| `POST` | `/api/v1/reports/generate` | Generate a report |
-| `GET` | `/api/v1/reports/executive-summary` | One-page printable summary from persisted records |
-| `POST` | `/api/v1/vendor-compliance/seed` | Load the clearly labeled synthetic vendor demo records |
-| `POST` | `/api/v1/vendor-compliance/checks/run` | Assess all vendors or pass `vendor_id` |
-| `GET` | `/api/v1/vendor-compliance/scorecards` | List calculated vendor scorecards |
-| `GET` | `/api/v1/vendor-compliance/exceptions` | List vendor exceptions with missing evidence |
-| `POST` | `/api/v1/vendor-compliance/master-cleanup/scan` | Detect vendor master quality issues |
-| `GET/POST` | `/api/v1/vendor-compliance/tax-rules` | Maintain dated tax rule versions; new rules start pending review |
-| `POST` | `/api/v1/vendor-compliance/tax-rules/{id}/approve` | Record explicit tax-rule approval |
-
-Vendor Compliance setup: after migrations, open `/vendor-compliance`, choose
-**Load synthetic demo data**, then **Run compliance checks**. Master-data cleanup
-is a separate scan. Synthetic records are not real supplier evidence. Only
-approved, effective tax rules are used for rate-based TDS checks; missing or
-unverified evidence remains visible as an exception.
-
-See [accuracy-report.md](accuracy-report.md) for verified workbook row counts,
-retry behavior, measurement assumptions, and remaining evidence limits.
-
----
-
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `postgresql+psycopg2://finops:finops_secret@localhost:5432/finops_ai` | Sync DB connection (psycopg2) |
-| `ASYNC_DATABASE_URL` | `postgresql+asyncpg://...` | Async DB connection for FastAPI |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis for Celery broker |
-| `SECRET_KEY` | *(change in production)* | JWT signing key |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Comma-separated allowed origins |
-| `MAX_UPLOAD_SIZE_MB` | `50` | Maximum file upload size |
-| `MAX_ROWS_PER_IMPORT` | `100000` | Maximum rows per imported dataset |
-| `AI_ENABLED` | `false` | Enable LLM-powered insights |
-| `AI_RETENTION_APPROVED` | `false` | Explicitly confirms provider and data-retention settings are approved |
-| `AI_PROVIDER` | `openai` | `openai`, `anthropic`, or `google` |
-| `OPENAI_API_KEY` | — | Required when `AI_PROVIDER=openai` |
-| `ANTHROPIC_API_KEY` | — | Required when `AI_PROVIDER=anthropic` |
-| `GOOGLE_API_KEY` | — | Required when `AI_PROVIDER=google` |
-| `ENVIRONMENT` | `development` | `development` or `production` |
-| `LOG_LEVEL` | `INFO` | Logging verbosity |
-
----
-
-## Development Guide
-
-### Conventions
-
-- **Services layer** (`app/services/`) contains all business logic — routers only validate input and delegate
-- **Schemas** (`app/schemas/`) are Pydantic v2 models, strictly separate from ORM models
-- **All monetary arithmetic** uses Python `Decimal`, never `float`
-- **Background imports** are handled by Celery tasks, not inline in HTTP request handlers
-- **Observed fees** are calculated from imported gateway records. Pricing rules and savings scenarios are configurable estimates and are not verified contract rates.
-- **Compliance rules** require a source reference, version, effective dates, and explicit approval before rate-based checks use them. Legal rates and section mappings are not inferred by the application.
-- External AI requests stay disabled unless `AI_ENABLED=true`, a supported provider key is present, and `AI_RETENTION_APPROVED=true`.
-
-### Running Tests
-
-```bash
-cd backend
-pytest --cov=app --cov-report=term-missing
-```
-
-### Type Checking
-
-```bash
-cd backend
-mypy app/
-```
-
-### Frontend Build
-
-```bash
-cd frontend
-npm run build      # Production build
-npm run preview    # Preview production build locally
-```
-
----
-
-## Troubleshooting
-
-### "Upload failed" / Data not inserted
-
-The most common cause is the backend failing to connect to PostgreSQL.
-
-**Step 1 — Verify PostgreSQL is running:**
 ```powershell
-# Windows
-Get-Service *postgres*
+docker run --name finops-redis -p 6379:6379 -d redis:7-alpine
 ```
 
-**Step 2 — Verify the database and user exist:**
-```bash
-psql -U postgres -c "\du"        # list users
-psql -U postgres -c "\l"         # list databases
-```
+If that container already exists, use `docker start finops-redis`. Then open another terminal:
 
-**Step 3 — Test the connection directly:**
-```bash
-psql -U finops -d finops_ai -h localhost
-```
-If this fails with *"password authentication failed"*, update `DATABASE_URL` in your `.env` to match the actual PostgreSQL user credentials.
-
-**Step 4 — Run migrations** if tables are missing:
-```bash
+```powershell
 cd backend
-alembic upgrade head
+.\venv\Scripts\Activate.ps1
+celery -A app.workers.celery_app worker --loglevel=info --pool=solo
 ```
 
-**Step 5 — Confirm the backend is reachable:**
+Keep this worker terminal running. When Redis/Celery is not configured, queued jobs may not be processed until the synchronous fallback runs; for a dependable demo, start Redis and the worker before uploading files.
 
-Open http://localhost:8000/health — it should return `{"status": "ok"}`. If it doesn't, start the backend:
-```bash
+### 6. Load the demo data
+
+In the app, go to **Data Uploads** and upload each workbook listed above using the matching dataset type. Wait for each import status to become `COMPLETED` (or inspect warnings if it completes with warnings). Then go to **Reconciliation** and trigger a run.
+
+The original supplied workbooks are under `data/`. Uploading through the UI stores copies under `backend/data/uploads/` and imports their rows into PostgreSQL.
+
+## Demo walkthrough
+
+1. **Data Uploads:** show the four dataset imports and their job status.
+2. **Reconciliation:** run/select a reconciliation; explain source rows, matched pairs, unmatched records, and overlapping exception flags.
+3. **Exceptions:** open a finding and review the source evidence, available amount difference, and status.
+4. **Analytics:** show month-wise volume/count/observed fees. Explain that rates are currency-specific and fees are observed.
+5. **Pricing & Savings:** add two explicitly illustrative rules based on documented assumptions, then run a scenario with the same currency/geography/payment method. Present output as an estimate, not verified savings.
+6. **Reports:** open the one-page summary and export CSVs as needed.
+7. **Vendor Compliance:** seed synthetic demo records, run checks, and inspect scorecards, exceptions, missing evidence, cleanup findings, and tax-rule approval status.
+
+## API and documentation
+
+All application routes are under `/api/v1`, except health and documentation routes. The authoritative endpoint list is in the running OpenAPI page at <http://localhost:8000/api/docs>.
+
+Main route groups include:
+
+- `/uploads`, `/jobs`
+- `/reconciliation/runs`
+- `/exceptions`
+- `/analytics/overview`, `/analytics/gateway-costs`, `/analytics/settlements`
+- `/pricing-rules`, `/savings-scenarios`
+- `/reports/executive-summary` and CSV download endpoints
+- `/vendor-compliance/vendors`, `/seed`, `/checks/run`, `/scorecards`, `/exceptions`, `/master-cleanup`, `/tax-rules`
+
+## Tests and build
+
+From the repository root in PowerShell:
+
+```powershell
 cd backend
-uvicorn app.main:app --reload --port 8000
+pytest -q
 ```
 
-### Backend import errors on startup
+Frontend type-check and production build:
 
-```bash
-cd backend
-pip install -r requirements.txt
-python -c "from app.main import app; print('OK')"
+```powershell
+cd frontend
+npm run build
 ```
 
-### Frontend cannot reach the API
+A successful Vite build may still print a bundle-size warning; that warning is distinct from a failed build. For verified import row counts, accuracy constraints, prior clean PostgreSQL migration evidence, and other caveats, see [accuracy-report.md](accuracy-report.md).
 
-The Vite dev server proxies `/api` to `http://localhost:8000`. If the backend port is different, update `target` in `frontend/vite.config.ts`.
+### Latest executed verification
 
----
+On 2026-10-24, the backend workflow integration suite completed with **6 passed**. The frontend TypeScript project check and Vite production build also passed; Vite printed a large-chunk size warning. The clean PostgreSQL migration verification documented in [accuracy-report.md](accuracy-report.md) was executed on 2026-10-23.
 
-## License
+## Security and data handling
 
-This project is proprietary and confidential. All rights reserved.
+- Never commit `.env`, passwords, API keys, or real financial/vendor records.
+- Use only masked or dummy data for this demo. Use real data only in an approved environment.
+- Keep AI disabled unless both the provider and retention settings are approved by the responsible organization.
+- Uploads are stored locally under `backend/data/uploads/`; protect and remove them according to the environment's data-handling policy.
+- This project is a demonstration, not a substitute for finance, tax, legal, or compliance review.
 
----
+## Known limitations
 
-*Built with FastAPI · React · PostgreSQL · Celery*
+- The supplied payment workbooks are dummy September 2026 datasets, not live provider feeds or bank statements.
+- Gateway B payout totals are derived from imported balance rows grouped by payout ID. The supplied workbook does not include an independent bank transfer ledger for second-source settlement verification.
+- Actual observed gateway fees are not signed or independently verified contract rates. Savings estimates require user-configured pricing rules and are not guaranteed.
+- The application exposes reconciliation issue flags, but a flagged exception is not proof of fraud, overcharge, or root cause.
+- Vendor checks use synthetic records. Rule-based outcomes depend on evidence fields and approved rule configuration; legal interpretation requires qualified review.
+- The app does not provide authentication or production deployment hardening. Do not expose a local development server to untrusted networks.
+- The build has a known large JavaScript bundle warning; the production build still completes.
+
+## Repository map
+
+```text
+FinOps-AI/
+├── backend/
+│   ├── app/
+│   │   ├── api/v1/routers/       # FastAPI route groups
+│   │   ├── core/                 # Settings and configuration
+│   │   ├── db/                   # SQLAlchemy engine/session
+│   │   ├── models/               # Payment and vendor ORM models
+│   │   ├── services/             # Imports, analytics, reconciliation, compliance
+│   │   ├── workers/              # Celery app and tasks
+│   │   └── main.py               # FastAPI application
+│   ├── alembic/                  # Database migration history
+│   ├── data/uploads/             # Runtime upload storage (ignored by Git)
+│   ├── tests/                    # Unit and integration tests
+│   └── requirements.txt
+├── data/                         # Supplied dummy Excel workbooks
+├── frontend/
+│   ├── src/api/                  # HTTP client
+│   ├── src/components/layout/    # App layout and navigation
+│   ├── src/pages/                # Dashboard and workflow screens
+│   └── src/types/                # Frontend types
+├── accuracy-report.md            # Verification evidence and limits
+├── readme.md
+└── .env.example
+```
+
+## Licence
+
+This repository is proprietary and all rights reserved. See [LICENCE](LICENCE). It is not presented as an open-source licensed project.
