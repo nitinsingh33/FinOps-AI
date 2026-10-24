@@ -269,7 +269,7 @@ A successful Vite build may still print a bundle-size warning; that warning is d
 
 ### Latest executed verification
 
-On 2026-10-24, the backend workflow integration suite completed with **6 passed**. The frontend TypeScript project check and Vite production build also passed; Vite printed a large-chunk size warning. The clean PostgreSQL migration verification documented in [accuracy-report.md](accuracy-report.md) was executed on 2026-10-23.
+On 2026-10-24, the backend workflow integration suite was reported with **6 passed**; this is the workflow integration test count, not the full backend test-suite count. The latest reported full-suite result was **70 passed**, with the focused vendor compliance suite at **8 passed**. The frontend TypeScript project check and Vite production build also passed; Vite printed a large-chunk size warning. The clean PostgreSQL migration verification documented in [accuracy-report.md](accuracy-report.md) was executed on 2026-10-23. These results were reported from the project environment and have not been independently reproduced in the current audit environment. See [accuracy-report.md](accuracy-report.md) for the complete verification history.
 
 ## Security and data handling
 

@@ -1,5 +1,15 @@
 # Accuracy and verification report
 
+## Latest verification summary
+
+Latest results reported from the project environment (2026-10-24): backend full
+suite `venv\Scripts\python.exe -m pytest -q` — **70 passed**; focused vendor
+suite `venv\Scripts\python.exe -m pytest tests/integration/test_vendor_compliance.py -q`
+— **8 passed**; frontend TypeScript check (`tsc -b`) and production build
+(`vite build`) succeeded, with the existing large-chunk warning. These results
+have not been independently reproduced in the current audit environment. The
+dated entries below preserve the earlier verification history.
+
 ## Supplied workbook import
 
 The integration workflow imports the supplied September 2026 workbooks through
