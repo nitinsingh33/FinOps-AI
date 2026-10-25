@@ -1,230 +1,140 @@
 # FinOps AI
 
-FinOps AI is a demo full-stack finance operations application for payment reconciliation, gateway fee analysis, savings scenarios, and vendor GST/TDS compliance workflows. It is built around masked or synthetic data and deterministic rules; AI-assisted exception explanations are optional.
+A local portfolio application for payment operations and vendor compliance review. It imports sample payment-provider spreadsheets and invoice PDFs, runs deterministic checks, and presents findings and CSV reports in a web interface.
 
-> **Project status:** Core upload, reconciliation, analytics, pricing-scenario, reporting, and vendor-compliance workflows exist. See [Known limitations](#known-limitations) and [accuracy-report.md](accuracy-report.md) before treating outputs as operational or legal conclusions.
+> **Use and accuracy:** This is a portfolio demo, not a production finance or tax system. Use dummy or masked data only. Observed fees are not verified contract rates, and missing tax evidence is not proof of compliance or a violation. See [accuracy-report.md](accuracy-report.md) for calculation rules and evidence limits.
 
-## Contents
-
-- [Problem statement](#problem-statement)
-- [What the application does](#what-the-application-does)
-- [Architecture](#architecture)
-- [How the workflows work](#how-the-workflows-work)
-- [AI and automation](#ai-and-automation)
-- [Technology](#technology)
-- [Run locally on Windows](#run-locally-on-windows)
-- [Demo walkthrough](#demo-walkthrough)
-- [API and documentation](#api-and-documentation)
-- [Tests and build](#tests-and-build)
-- [Security and data handling](#security-and-data-handling)
-- [Known limitations](#known-limitations)
-- [Repository map](#repository-map)
-- [Licence](#licence)
-
-## Problem statement
-
-Payment operations teams receive separate exports from payment providers. Matching those records by hand makes it harder to find missing transactions, fee or currency differences, refunds, delayed settlements, and payout issues before closing the books. Gateway fee comparisons can also be misleading when currencies or payment methods are mixed, or when observed fees are mistaken for signed contract rates.
-
-A related vendor-compliance workflow demonstrates how GST, TDS, MSME deadlines, and vendor-master evidence can be checked and exceptions surfaced before close. Missing documents or unapproved tax rules must remain visible as gaps rather than being treated as proof of compliance.
-
-This project provides a reviewable demo of those workflows using the supplied dummy payment workbooks and synthetic vendor records.
-
-## What the application does
+## What the app does
 
 ### Payment Intelligence
 
-| Workflow | What it does | Where to find it |
-|---|---|---|
-| Operational overview | Shows payment/import totals, recent reconciliation runs, and recent exceptions from the API | **Dashboard** |
-| Dataset import | Accepts Excel/CSV gateway exports, records import jobs, validates and normalizes rows, and preserves source provenance | **Data Uploads** |
-| Reconciliation | Matches Gateway A payment and transaction records; checks unmatched records, currencies, fees, net amounts, refunds, settlements, and Gateway B balance/payout fields | **Reconciliation** |
-| Exception review | Lists issue flags with severity, source links, available amounts/differences, review status, notes, and audit history | **Exceptions** |
-| Monthly cost view | Groups captured Gateway A payments and Gateway B charge rows by transaction month, gateway, and currency; shows count, gross volume, observed fees, and a comparable rate where possible | **Analytics** |
-| Pricing scenarios | Estimates fees using explicitly configured pricing assumptions, scoped to currency and optionally country/payment method | **Pricing & Savings** |
-| Exports and summary | Provides payment, transaction, refund, and exception CSV exports plus a printable one-page executive summary | **Reports** |
+- Import Gateway A payment, transaction, and refund workbooks and Gateway B balance rows.
+- Reconcile available payment and gateway records; review matches, unmatched records, and issue flags.
+- View monthly transaction counts, volume, observed fees, taxes, and settlement timing, grouped without mixing currencies.
+- Configure pricing assumptions and compare estimated gateway fees.
+- Review the printable executive summary and download CSV reports.
 
-### Vendor GST/TDS Compliance
+### Vendor Compliance
 
-The existing Vendor Compliance page supports both **Synthetic demo data** and **HR Sample_Invoices PDFs** in a dataset selector. These views are filtered separately; switching the selector does not mix HR and synthetic vendors.
+- Review the supplied sample invoice PDFs separately from developer test records.
+- Inspect extracted fields, source documents, mapping status, and review reasons.
+- Run GST, TDS, MSME, and vendor-master checks; review scorecards and exceptions.
+- Download the vendor scorecard, compliance exception, vendor cleanup, and document review CSVs.
+- Manage versioned tax rules. Sample rules are not approved legal rules.
 
-For the HR PDF dataset, select **HR Sample_Invoices PDFs**, choose the 50 supplied PDFs (or a ZIP containing them), and click **Import**. Selectable text is extracted with `pypdf`; PDFs without selectable text are marked failed/review-required because OCR is not configured. The importer retains source filenames, SHA-256 hashes, per-field extraction status/evidence, import batches, and the source PDFs under `backend/data/uploads/vendor_documents/`. `data/Sample_Invoices/` and runtime uploads are excluded from Git; do not commit supplied invoice files.
-
-After import, use **Run compliance checks** and **Scan vendor master**. The page shows parsed vendor/invoice fields, document type, mapping status, source filenames, scorecards, missing evidence, exceptions, and cleanup actions. Tax invoices are mapped only when the required identity, invoice, amount, currency, and state fields are explicitly extractable. Proformas, debit/credit notes, bills of supply, cash memos, generic invoices, non-INR invoices, and incomplete records remain in review unless safely mappable. A PDF is not proof of active GST registration, operative PAN, GSTR-2B presence, payment, TDS deduction/deposit/reporting, or MSME status. Missing evidence remains an exception; a high-risk score can reflect evidence gaps and is not proof of a tax breach.
-
-Use the HR view's buttons to export the **Scorecards CSV**, **Exception report CSV**, **Vendor cleanup CSV**, and the **Import review CSV**. The import review export lists document-level review reasons and source filenames. Exception amounts stay blank when the source data does not support quantification. The source invoices contain multiple currencies; the importer preserves them and only maps INR tax invoices into the current invoice model.
-
-The installed backend requirements include `pypdf`. After updating an existing environment, run `python -m pip install -r requirements.txt`. The local workflow uses the existing PostgreSQL database and an additive migration:
-
-```powershell
-cd backend
-alembic upgrade head
-```
-
-API routes are under `/api/v1/vendor-compliance`: `POST /documents/import` accepts multipart `files` fields containing PDFs or ZIPs; `GET /documents` and `/documents/batches` list import results; `GET /documents/export.csv` exports document review; `GET /reports/scorecards.csv?source=hr`, `/reports/exceptions.csv?source=hr`, and `/reports/cleanup.csv?source=hr` export the three deliverables. Import limits are 20 MB per PDF, 100 MB per batch, and 200 PDFs. ZIP paths are validated and members are processed without extracting archive paths to disk.
-
-The project does not invent statutory rates or legal section mappings. Invoice data is separate from synthetic demos, and tax conclusions require tax-team-approved rules plus the missing external evidence.
+The invoice PDFs do not prove registration status, GSTR-2B presence, payment, TDS deduction/deposit/reporting, or MSME status. Those findings remain evidence gaps unless the relevant records are supplied.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    Browser[React + TypeScript UI] -->|REST /api/v1| API[FastAPI]
-    API --> Services[Import, reconciliation, analytics, pricing, reports, compliance]
+    Browser[React and TypeScript] -->|REST API| API[FastAPI]
+    API --> Services[Import, reconciliation, analytics, pricing, compliance]
     Services --> ORM[SQLAlchemy]
     ORM --> DB[(PostgreSQL)]
-    API -->|queued import/reconciliation work| Redis[(Redis broker)]
+    API --> Files[Local upload storage]
+    API -->|Background jobs| Redis[(Redis)]
     Redis --> Worker[Celery worker]
     Worker --> Services
-    API -. optional exception explanation .-> AI[Configured AI provider]
-    Uploads[Excel / CSV files] --> API
-    API --> Storage[backend/data/uploads]
-    Storage --> Services
 ```
 
-The API and Celery worker share the database configuration and application services. Redis is used for asynchronous jobs. If the worker/broker is unavailable, some API paths attempt a synchronous fallback; for reliable background processing, keep Redis and the worker running.
+The frontend calls API routes under `/api/v1`. PostgreSQL stores normalized records and results; uploaded source files are stored separately. Redis and Celery process background jobs when configured.
 
-Reconciliation values are calculated from normalized database records. The UI reads API responses; dashboard totals are not intended to be hardcoded demo metrics. Uploaded files are retained separately from normalized database rows.
+## Sample data
 
-## How the workflows work
+The four payment workbooks are in `data/`:
 
-### Import and reconciliation
+| File                                     | Upload type        | Verified source rows |
+| ---------------------------------------- | ------------------ | -------------------: |
+| `GatewayA_payments_Sep26_dummy.xlsx`     | `GWA_PAYMENTS`     |                  475 |
+| `GatewayA_transactions_Sep26_dummy.xlsx` | `GWA_TRANSACTIONS` |                  414 |
+| `GatewayA_refunds_Sep26_dummy.xlsx`      | `GWA_REFUNDS`      |                   13 |
+| `GatewayB_Sep26_dummy.xlsx`              | `GWB_BALANCE`      |                  731 |
 
-1. Upload the supplied workbook and select its dataset type.
-2. The import job parses source rows, records warnings/errors/duplicates, and saves normalized rows with source provenance.
-3. Trigger a reconciliation run.
-4. Review **Matches** and **Exceptions** for that run. Exceptions are issue flags and may overlap matched or unmatched records.
+These are dummy September 2026 files. The checked import tests verify 1,633 source rows across the four files and idempotent retries; details and caveats are in [accuracy-report.md](accuracy-report.md).
 
-The supplied September 2026 workbooks are:
-
-| Workbook | Dataset | Rows verified |
-|---|---|---:|
-| `GatewayA_payments_Sep26_dummy.xlsx` | Gateway A payments | 475 |
-| `GatewayA_transactions_Sep26_dummy.xlsx` | Gateway A transactions | 414 |
-| `GatewayA_refunds_Sep26_dummy.xlsx` | Gateway A refunds | 13 |
-| `GatewayB_Sep26_dummy.xlsx` | Gateway B balance transactions | 731 |
-
-These counts total **1,633 source rows**. They are not expected to equal the sum of matched, unmatched, and exception counts:
-
-- **Source Rows Scanned** counts imported ledger rows included by the run.
-- **Matched** counts linked Gateway A payment/transaction pairs.
-- **Unmatched** counts records missing a corresponding side.
-- **Exceptions** counts issue flags; multiple flags can relate to the same record, and flags can overlap matched or unmatched records.
-
-See [accuracy-report.md](accuracy-report.md) for import warnings, retry behavior, matching assumptions, and verification history.
-
-### Monthly metrics and observed fees
-
-Analytics groups records by their transaction timestamp, gateway, and currency. It does not add amounts across currencies. The monthly view uses captured Gateway A payments and Gateway B charge rows; records without a transaction timestamp are omitted and the UI reports that omission.
-
-Fees from uploaded exports are **observed fees**, not verified contract terms. If fee currency differs from transaction currency, a blended effective fee rate is not calculated.
-
-### Pricing and savings scenarios
-
-Pricing rules are entered by the user; newly added rules default to **Illustrative**. A scenario estimates fees for a volume using the selected rules and context. If a rule's currency, country, payment method, effective date, or fixed-fee currency does not fit the scenario, that estimate is left unavailable and the limitation is shown.
-
-The repository does not preload made-up contract rates. Scenario output is an estimate—not guaranteed savings, a recommendation backed by a signed contract, or an independently verified quote. Use only approved pricing evidence for business decisions.
-
-### Executive report
-
-The **Reports** page links to a printable executive summary generated from persisted database records. It also provides CSV exports. Review the report's currency and evidence notes before sharing it.
-
-## AI and automation
-
-- Import normalization, reconciliation matching, metric aggregation, pricing arithmetic, and vendor checks are deterministic application code.
-- AI is **disabled by default** (`AI_ENABLED=false`). When unavailable, exception investigation returns a clearly labeled deterministic fallback.
-- Implemented live AI provider calls are OpenAI and Anthropic. Provider credentials are never committed to the repository.
-- To enable an AI provider, the operator must set `AI_ENABLED=true`, configure the matching key, and explicitly set `AI_RETENTION_APPROVED=true`. That flag is an operator confirmation; it does not configure retention at the provider. Confirm the selected provider's retention settings separately before sending any data.
-- Exception evidence packets omit customer email, phone, and card details. AI output is labeled and schema-validated; it does not update financial records, mark payments settled, or decide compliance.
-- Do not send real financial or vendor data through an unapproved provider or environment.
-
-## Technology
-
-| Area | Main components |
-|---|---|
-| Backend API | Python, FastAPI, Pydantic Settings |
-| Database and migrations | PostgreSQL, SQLAlchemy 2, Alembic |
-| Background jobs | Celery, Redis |
-| Workbook ingestion | pandas, openpyxl, xlrd |
-| Frontend | React 19, TypeScript, Vite |
-| Data fetching and charts | TanStack Query, Recharts |
-| Optional AI investigation | OpenAI or Anthropic SDKs, disabled unless explicitly enabled |
-
-Pinned backend dependencies are in [backend/requirements.txt](backend/requirements.txt); frontend dependencies/scripts are in [frontend/package.json](frontend/package.json).
+The invoice sample contains 50 PDFs. The most recently recorded import parsed all 50 files, mapped 38 tax invoices, and kept all 50 in review because required external evidence is incomplete. This describes that dated sample import, not a guaranteed count for every database. The local `data/Sample_Invoices/` folder and runtime uploads are ignored by Git; do not commit supplied invoice files.
 
 ## Run locally on Windows
 
 ### Prerequisites
 
 - Python 3.12 or newer
-- Node.js 20.19+ or 22.12+ (Vite 8 requirement)
+- Node.js 20.19+ or 22.12+
 - PostgreSQL running locally
-- Redis 7+ and Docker only if you want background jobs through Celery
+- Docker Desktop with Redis 7, if you want background imports/reconciliation through Celery
 
-### 1. Prepare PostgreSQL
+### 1. Create or choose a PostgreSQL database
 
-Create a local database and user in pgAdmin or `psql`. For example, in a PostgreSQL query window:
+You can use pgAdmin or `psql`. If you need a new local role and database, run this once in a PostgreSQL query window connected as an administrator. Choose your own local password:
 
 ```sql
-CREATE USER finops WITH PASSWORD 'choose-a-local-password';
+CREATE ROLE finops LOGIN PASSWORD 'choose-a-local-password';
 CREATE DATABASE finops_ai OWNER finops;
 ```
 
-Use your own local password. In `backend/.env`, set `DATABASE_URL` to match your PostgreSQL username, password, host, port, and database. For the example above:
+If the role or database already exists, keep using it; do not recreate it. In `backend/.env`, set `DATABASE_URL` and `ASYNC_DATABASE_URL` to your local database. For the example above:
 
 ```dotenv
-DATABASE_URL=postgresql+psycopg2://finops:YOUR_URL_ENCODED_PASSWORD@localhost:5432/finops_ai
+DATABASE_URL=postgresql+psycopg2://finops:YOUR_PASSWORD@localhost:5432/finops_ai
+ASYNC_DATABASE_URL=postgresql+asyncpg://finops:YOUR_PASSWORD@localhost:5432/finops_ai
 ```
 
-If a `backend/.env` already exists, edit it; do not overwrite it. The root `.env.example` is a template. Keep `.env` files and credentials private.
+URL-encode special characters in the password. Do not commit `backend/.env` or real credentials.
 
-### 2. Install backend dependencies and migrate
+### 2. Install backend dependencies and apply migrations
 
-Open a VS Code terminal at the repository root and run:
+Run from the repository root in PowerShell:
 
 ```powershell
 cd backend
-py -m venv venv
+py -3.12 -m venv venv
 .\venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
+if (-not (Test-Path .env)) { Copy-Item ..\.env.example .env }
+notepad .env
+```
+
+If `backend/.env` already exists, keep it and edit the database URLs above. From the `backend` directory, apply migrations:
+
+```powershell
 alembic upgrade head
 ```
 
-If PowerShell blocks environment activation, run `.\venv\Scripts\alembic.exe upgrade head`. The `alembic upgrade head` command works after the environment is activated.
-
-### 3. Start the API
+### 3. Start the backend — Terminal 1
 
 Keep this terminal open:
 
 ```powershell
 cd backend
 .\venv\Scripts\Activate.ps1
+alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
-API health: <http://localhost:8000/health/ready>
-Interactive API docs: <http://localhost:8000/api/docs>
+Check the API at [http://localhost:8000/health/ready](http://localhost:8000/health/ready). Interactive endpoints are at [http://localhost:8000/api/docs](http://localhost:8000/api/docs).
 
-### 4. Start the frontend
+### 4. Start the frontend — Terminal 2
 
-Open a second VS Code terminal:
+Open a second terminal at the repository root:
 
 ```powershell
 cd frontend
 npm install
-npm run dev
+npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-Open <http://localhost:5173>.
+Open [http://localhost:5173](http://localhost:5173).
 
-### 5. Optional: start Redis and the Celery worker
+### 5. Optional: start Redis and the worker — Terminal 3
 
-For background import/reconciliation tasks, start Redis. If Docker is installed and port `6379` is free:
+Background jobs need both Redis and the Celery worker. Start a Redis container once (if it does not already exist):
 
 ```powershell
 docker run --name finops-redis -p 6379:6379 -d redis:7-alpine
 ```
 
-If that container already exists, use `docker start finops-redis`. Then open another terminal:
+For a container you already created, start it with `docker start finops-redis`. Then, in Terminal 3:
 
 ```powershell
 cd backend
@@ -232,108 +142,81 @@ cd backend
 celery -A app.workers.celery_app worker --loglevel=info --pool=solo
 ```
 
-Keep this worker terminal running. When Redis/Celery is not configured, queued jobs may not be processed until the synchronous fallback runs; for a dependable demo, start Redis and the worker before uploading files.
+Keep the worker terminal running while processing imports or reconciliation jobs. If Redis is unavailable, jobs may remain queued.
 
-### 6. Load the demo data
+## First demo walkthrough
 
-In the app, go to **Data Uploads** and upload each workbook listed above using the matching dataset type. Wait for each import status to become `COMPLETED` (or inspect warnings if it completes with warnings). Then go to **Reconciliation** and trigger a run.
+1. In **Data Uploads**, import the four workbooks above using their matching upload types. Wait for each import job to finish and review any warnings.
+2. In **Reconciliation**, trigger a run. Read **Source Rows Scanned**, **Matched**, and **Unmatched** as different record/link counts. **Exceptions** are issue flags and can overlap those counts.
+3. In **Analytics**, review month-wise volume, transaction count, observed fees, and settlement timing. Keep currency groups separate.
+4. In **Pricing & Savings**, add clearly labelled illustrative rules and run a scenario only when both gateways have compatible rules. Estimates are not confirmed savings.
+5. In **Reports**, open the executive summary and download the payment CSVs.
+6. In **Vendor Compliance**, the **Supplier Invoices** dataset is selected by default. Open **Invoices** and choose **Import invoices** to add PDFs or a ZIP. Run checks, inspect exceptions and vendor cleanup, and download the three vendor CSVs plus the document review CSV.
+7. Use **Use test dataset** only when you want to inspect separate developer test records. It does not combine them with Supplier Invoices.
 
-The original supplied workbooks are under `data/`. Uploading through the UI stores copies under `backend/data/uploads/` and imports their rows into PostgreSQL.
+Selectable PDF text is extracted with `pypdf`. OCR is not configured; scanned or empty PDFs require manual review. Re-imports use document hashes to avoid duplicating the same source file.
 
-## Demo walkthrough
+## Reports and API
 
-1. **Data Uploads:** show the four dataset imports and their job status.
-2. **Reconciliation:** run/select a reconciliation; explain source rows, matched pairs, unmatched records, and overlapping exception flags.
-3. **Exceptions:** open a finding and review the source evidence, available amount difference, and status.
-4. **Analytics:** show month-wise volume/count/observed fees. Explain that rates are currency-specific and fees are observed.
-5. **Pricing & Savings:** add two explicitly illustrative rules based on documented assumptions, then run a scenario with the same currency/geography/payment method. Present output as an estimate, not verified savings.
-6. **Reports:** open the one-page summary and export CSVs as needed.
-7. **Vendor Compliance (synthetic):** select **Synthetic demo data**, seed records, run checks, and inspect scorecards, exceptions, missing evidence, cleanup findings, and tax-rule approval status.
-8. **Vendor Compliance (HR PDFs):** select **HR Sample_Invoices PDFs**, import the supplied PDFs, inspect each source file and extracted fields, run compliance checks, scan the vendor master, then download the scorecard, exception, and cleanup CSVs. Review notes are expected because invoice PDFs do not include payment, GSTR-2B, challan, return, or authoritative registration evidence.
+The interactive API documentation lists the current endpoints and request schemas. Main route groups include:
 
-## API and documentation
+- `/api/v1/uploads` and `/api/v1/jobs`
+- `/api/v1/reconciliation/runs` and `/api/v1/exceptions`
+- `/api/v1/analytics/*`
+- `/api/v1/pricing-rules` and `/api/v1/savings-scenarios`
+- `/api/v1/reports/*`
+- `/api/v1/vendor-compliance/*`
 
-All application routes are under `/api/v1`, except health and documentation routes. The authoritative endpoint list is in the running OpenAPI page at <http://localhost:8000/api/docs>.
+The Vendor Compliance page provides these CSV exports for the selected dataset: vendor scorecard, compliance exception report, vendor master cleanup, and (for supplier invoice documents) document review.
 
-Main route groups include:
+## AI, security, and limitations
 
-- `/uploads`, `/jobs`
-- `/reconciliation/runs`
-- `/exceptions`
-- `/analytics/overview`, `/analytics/gateway-costs`, `/analytics/settlements`
-- `/pricing-rules`, `/savings-scenarios`
-- `/reports/executive-summary` and CSV download endpoints
-- `/vendor-compliance/vendors`, `/seed`, `/checks/run`, `/scorecards`, `/exceptions`, `/master-cleanup`, `/tax-rules`
-- `/vendor-compliance/documents/import`, `/documents`, `/documents/batches`, `/documents/export.csv`, and `/reports/{scorecards|exceptions|cleanup}.csv`
+- Importing, reconciliation, analytics, pricing arithmetic, and compliance checks use application code; external AI is disabled by default (`AI_ENABLED=false`).
+- Do not enable an AI provider unless the provider is approved and its data-retention settings have been checked. `AI_RETENTION_APPROVED` is an operator confirmation; it does not change provider retention settings.
+- Never commit passwords, API keys, `.env` files, or private invoice PDFs. The app is not hardened for public deployment and has no production authentication.
+- Payment workbooks are dummy data. Fees are source-observed, not signed contract pricing. Gateway B payout rows are not independently matched to a bank transfer ledger.
+- Vendor findings depend on supplied invoice evidence and approved tax rules. The sample PDFs do not include all authoritative GST, payment, TDS, or MSME records needed to confirm legal compliance.
+- Scanned PDFs need OCR/manual review. Cross-currency amounts are not combined.
+- Pricing scenarios are estimates using configured rules. Fixed fees are applied once per scenario; transaction count is not modeled.
 
-## Tests and build
+## Verification
 
-From the repository root in PowerShell:
+Latest recorded checks in this workspace (2026-10-25):
+
+- Backend full suite: **81 passed**.
+- Focused workflow/pricing integration tests: **13 passed**.
+- Frontend `npm run build`: **passed** (TypeScript and Vite production build). Vite reports a large JavaScript chunk warning; the build completes successfully.
+
+Older verification results, migration evidence, calculation details, and known data limitations are preserved in [accuracy-report.md](accuracy-report.md).
+
+To rerun the checks:
 
 ```powershell
 cd backend
-pytest -q
+.\venv\Scripts\Activate.ps1
+python -m pytest -q
 ```
 
-Frontend type-check and production build:
+In another terminal:
 
 ```powershell
 cd frontend
 npm run build
 ```
 
-A successful Vite build may still print a bundle-size warning; that warning is distinct from a failed build. For verified import row counts, accuracy constraints, prior clean PostgreSQL migration evidence, and other caveats, see [accuracy-report.md](accuracy-report.md).
-
-### Latest executed verification
-
-On 2026-10-24, the current audit ran the full backend suite: **74 passed**, including 4 PDF-ingestion tests. The focused vendor-compliance plus PDF-ingestion suites reported **12 passed**. Frontend `npm run build` passed its TypeScript and Vite production-build steps; Vite printed the existing large-chunk warning. The additive PostgreSQL migration applied successfully, and read-only API checks returned the imported HR documents, scorecards, exceptions, cleanup rows, and CSV downloads. The backend virtual environment used for these checks has `pypdf==6.10.0` installed; it is also pinned in `backend/requirements.txt`. Earlier reported test counts and their environment notes remain in [accuracy-report.md](accuracy-report.md).
-
-## Security and data handling
-
-- Never commit `.env`, passwords, API keys, or real financial/vendor records.
-- Use only masked or dummy data for this demo. Use real data only in an approved environment.
-- Keep AI disabled unless both the provider and retention settings are approved by the responsible organization.
-- Uploads are stored locally under `backend/data/uploads/`; protect and remove them according to the environment's data-handling policy.
-- This project is a demonstration, not a substitute for finance, tax, legal, or compliance review.
-
-## Known limitations
-
-- The supplied payment workbooks are dummy September 2026 datasets, not live provider feeds or bank statements.
-- Gateway B payout totals are derived from imported balance rows grouped by payout ID. The supplied workbook does not include an independent bank transfer ledger for second-source settlement verification.
-- Actual observed gateway fees are not signed or independently verified contract rates. Savings estimates require user-configured pricing rules and are not guaranteed.
-- The application exposes reconciliation issue flags, but a flagged exception is not proof of fraud, overcharge, or root cause.
-- Vendor checks can use either synthetic examples or the HR-provided training PDFs. HR invoice evidence is incomplete for payment, GSTR-2B, TDS deposit/reporting, and authoritative registration checks; scorecards show missing evidence and are not legal conclusions.
-- The app does not provide authentication or production deployment hardening. Do not expose a local development server to untrusted networks.
-- The build has a known large JavaScript bundle warning; the production build still completes.
-
 ## Repository map
 
 ```text
-FinOps-AI/
-├── backend/
-│   ├── app/
-│   │   ├── api/v1/routers/       # FastAPI route groups
-│   │   ├── core/                 # Settings and configuration
-│   │   ├── db/                   # SQLAlchemy engine/session
-│   │   ├── models/               # Payment and vendor ORM models
-│   │   ├── services/             # Imports, analytics, reconciliation, compliance
-│   │   ├── workers/              # Celery app and tasks
-│   │   └── main.py               # FastAPI application
-│   ├── alembic/                  # Database migration history
-│   ├── data/uploads/             # Runtime upload storage (ignored by Git)
-│   ├── tests/                    # Unit and integration tests
-│   └── requirements.txt
-├── data/                         # Supplied dummy Excel workbooks
-├── frontend/
-│   ├── src/api/                  # HTTP client
-│   ├── src/components/layout/    # App layout and navigation
-│   ├── src/pages/                # Dashboard and workflow screens
-│   └── src/types/                # Frontend types
-├── accuracy-report.md            # Verification evidence and limits
-├── readme.md
-└── .env.example
+backend/                 FastAPI application, models, services, migrations, tests
+  app/api/v1/routers/    API endpoints
+  app/services/          Import, analytics, reconciliation, pricing, compliance
+  alembic/               Database migrations
+data/                     Supplied dummy payment workbooks
+frontend/src/             React application and pages
+accuracy-report.md        Verification evidence and calculation limits
+LICENCE                   Repository licence terms
 ```
 
 ## Licence
 
-This repository is proprietary and all rights reserved. See [LICENCE](LICENCE). It is not presented as an open-source licensed project.
+This repository is proprietary and all rights reserved. See [LICENCE](LICENCE).
