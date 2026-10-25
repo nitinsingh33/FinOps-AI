@@ -186,14 +186,15 @@ export default function VendorCompliancePage() {
           <tbody>{visibleDocs.length === 0 ? <tr><td colSpan={9}>{docs.length ? 'No invoices match these filters.' : 'No invoice documents imported. Use Import invoices to add files.'}</td></tr> : visibleDocs.map(d => {
             const expanded = expandedDocument === d.id
             return <Fragment key={d.id}><tr>
-              <td title={d.filename}>{d.filename}</td><td>{formatStatus(d.document_type)}</td>
-              <td><span className={'badge ' + (d.extraction_status === 'parsed' ? 'badge-success' : 'badge-warning')}>{formatStatus(d.extraction_status)}</span></td>
-              <td><span className={'badge ' + (d.mapping_status === 'mapped' ? 'badge-success' : 'badge-warning')}>{formatStatus(d.mapping_status)}</span></td>
-              <td>{d.fields.vendor_legal_name?.value ?? 'Unresolved'}</td>
-              <td>{d.fields.invoice_number?.value ?? '—'}<div className="text-muted text-sm">{d.fields.invoice_date?.value ?? 'Date missing'}</div></td>
-              <td>{d.fields.currency?.value ?? 'Unknown'} {d.fields.total_invoice_value?.value ?? 'amount missing'}</td>
-              <td>{d.review_reasons.length ? <details className="vc-note-details"><summary className="vc-truncate">{d.review_reasons.join('; ')}</summary><div>{d.review_reasons.join('; ')}</div></details> : 'No review note'}</td>
-              <td><button className="btn btn-ghost btn-sm" aria-expanded={expanded} onClick={() => setExpandedDocument(expanded ? null : d.id)}>{expanded ? 'Hide' : 'Inspect'}</button></td>
+              <td className="vc-invoice-source" title={d.filename} aria-label={d.filename}>{d.filename}</td>
+              <td className="vc-invoice-type">{formatStatus(d.document_type)}</td>
+              <td className="vc-invoice-status"><span className={'badge ' + (d.extraction_status === 'parsed' ? 'badge-success' : 'badge-warning')}>{formatStatus(d.extraction_status)}</span></td>
+              <td className="vc-invoice-status"><span className={'badge ' + (d.mapping_status === 'mapped' ? 'badge-success' : 'badge-warning')}>{formatStatus(d.mapping_status)}</span></td>
+              <td className="vc-invoice-vendor">{d.fields.vendor_legal_name?.value ?? 'Unresolved'}</td>
+              <td className="vc-invoice-identity"><div>{d.fields.invoice_number?.value ?? '—'}</div><div className="text-muted text-sm">{d.fields.invoice_date?.value ?? 'Date missing'}</div></td>
+              <td className="vc-invoice-total">{d.fields.currency?.value ?? 'Unknown'} {d.fields.total_invoice_value?.value ?? 'amount missing'}</td>
+              <td className="vc-invoice-notes">{d.review_reasons.length ? <details className="vc-note-details"><summary className="vc-truncate">{d.review_reasons.join('; ')}</summary><div>{d.review_reasons.join('; ')}</div></details> : 'No review note'}</td>
+              <td className="vc-invoice-details"><button className="btn btn-ghost btn-sm" aria-expanded={expanded} onClick={() => setExpandedDocument(expanded ? null : d.id)}>{expanded ? 'Hide' : 'Inspect'}</button></td>
             </tr>{expanded && <tr className="vc-document-detail"><td colSpan={9}><div className="vc-document-fields">{Object.entries(d.fields).map(([key, field]) => <div key={key}><strong>{formatStatus(key)}</strong>{field.value ?? formatStatus(field.status ?? 'not provided')}{field.evidence ? <div className="text-muted text-sm">Evidence: {field.evidence}</div> : null}</div>)}</div></td></tr>}</Fragment>
           })}</tbody>
         </table></div>
@@ -216,11 +217,13 @@ export default function VendorCompliancePage() {
             const vendor = vendorById.get(e.vendor_id)
             const expanded = expandedException === e.id
             return <Fragment key={e.id}>
-              <tr><td>{vendor?.legal_name ?? 'Unknown vendor'}</td><td>{e.invoice_number && <div>Invoice {e.invoice_number}</div>}{e.source_filename ? <div className="text-muted text-sm">{e.source_filename}</div> : !e.invoice_number ? 'Vendor-level finding' : null}</td><td>{e.title}<div className="text-muted text-sm">{formatStatus(e.category)} · {e.check_code}</div></td>
-                <td><span className={'badge ' + (exceptionState(e) === 'missing_evidence' ? 'badge-warning' : exceptionState(e) === 'manual_review' ? 'badge-info' : 'badge-muted')}>{exceptionStateLabel(e)}</span></td>
-                <td><span className={'badge ' + (e.severity === 'high' ? 'badge-danger' : 'badge-warning')}>{formatStatus(e.severity)}</span></td>
-                <td>{e.amount_at_stake ? e.currency + ' ' + Number(e.amount_at_stake).toLocaleString() : '—'}</td>
-                <td><span className="vc-truncate" title={e.suggested_action}>{e.suggested_action}</span></td>
+              <tr><td className="vc-exception-vendor">{vendor?.legal_name ?? 'Unknown vendor'}</td>
+                <td className="vc-exception-source">{e.invoice_number && <div className="vc-exception-invoice">Invoice {e.invoice_number}</div>}{e.source_filename ? <div className="vc-exception-filename text-muted text-sm" title={e.source_filename}>{e.source_filename}</div> : !e.invoice_number ? 'Vendor-level finding' : null}</td>
+                <td className="vc-exception-issue"><div>{e.title}</div><div className="vc-exception-category text-muted text-sm">{formatStatus(e.category)} · {e.check_code}</div></td>
+                <td className="vc-exception-status"><span className={'badge ' + (exceptionState(e) === 'missing_evidence' ? 'badge-warning' : exceptionState(e) === 'manual_review' ? 'badge-info' : 'badge-muted')}>{exceptionStateLabel(e)}</span></td>
+                <td className="vc-exception-severity"><span className={'badge ' + (e.severity === 'high' ? 'badge-danger' : 'badge-warning')}>{formatStatus(e.severity)}</span></td>
+                <td className="vc-exception-amount">{e.amount_at_stake ? e.currency + ' ' + Number(e.amount_at_stake).toLocaleString() : '—'}</td>
+                <td className="vc-exception-action"><span className="vc-truncate" title={e.suggested_action} aria-label={e.suggested_action}>{e.suggested_action}</span></td>
                 <td><button className="btn btn-ghost btn-sm" aria-expanded={expanded} onClick={() => setExpandedException(expanded ? null : e.id)}>{expanded ? 'Hide' : 'Inspect'}</button></td>
               </tr>
               {expanded && <tr className="vc-detail-row"><td colSpan={8}><strong>{e.title}</strong><p>{e.description}</p>{e.missing_information.length > 0 && <p><strong>Missing evidence:</strong> {e.missing_information.join('; ')}</p>}<p><strong>Suggested action:</strong> {e.suggested_action}</p><p className="text-muted text-sm">Check {e.check_code} · {vendor?.vendor_code ?? 'Vendor'}{e.invoice_number ? ' · Invoice ' + e.invoice_number : ''}{e.source_filename ? ' · ' + e.source_filename : ''}</p></td></tr>}

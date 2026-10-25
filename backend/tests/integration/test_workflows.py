@@ -23,7 +23,11 @@ from app.services.analytics_service import get_gateway_cost_analysis, get_settle
 from app.services.vendor_compliance.synthetic_data import seed_vendor_compliance_data
 from app.services.vendor_compliance.compliance_engine import run_vendor_compliance_checks
 from app.api.v1.routers.reports import download_payments_csv, executive_summary
-from app.api.v1.routers.pricing import SavingsScenarioCreate, create_savings_scenario
+from app.api.v1.routers.pricing import (
+    PricingRuleCreate, SavingsScenarioCreate, create_pricing_rule,
+    create_savings_scenario, delete_pricing_rule, get_savings_scenario,
+    list_pricing_rules, list_savings_scenarios, update_pricing_rule,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKBOOKS = [
@@ -189,11 +193,26 @@ def test_reconciliation_and_csv_export_use_imported_records(db):
     assert "gateway_payment_id" in body
     assert db.query(Payment).first().gateway_payment_id in body
     page = executive_summary(db=db).body.decode("utf-8")
-    assert "Executive Summary" in page
-    assert "Observed monthly cost" in page
-    assert "Settlement timing" in page
-    assert "Reconciliation and exceptions" in page
-    assert "contract" in page.lower()
+    assert "Payment Gateway Executive Summary" in page
+    assert "Reporting period:" in page
+    assert "Payment records" in page and "Gateway ledger records" in page
+    assert "Gateway comparison" in page
+    assert "Observed fees" in page
+    assert "Effective rate" in page
+    assert "Median settlement" in page
+    assert "Gateway A" in page and "Gateway B" in page
+    assert "Key findings" in page
+    assert "Recommended next steps" in page
+    assert page.count('class="finding"') == 3
+    assert page.count('<li>') == 3
+    comparison_rows = page.split('<tbody>', 1)[1].split('</tbody>', 1)[0].count('<tr>')
+    assert 1 <= comparison_rows <= 5
+    assert "not confirmed losses" in page
+    assert "not independent bank evidence" in page
+    assert "/analytics" in page and "/reconciliation" in page
+    assert "Savings and routing" not in page
+    assert "Priority issue" not in page
+    assert "Amount at stake by currency" not in page
 
 
 def test_partial_refunds_are_aggregated_by_currency_and_ignore_failed_refunds(db):
@@ -235,18 +254,15 @@ def test_pricing_scenario_rejects_currency_mismatch(db):
     alternative = PricingRule(id="price-b", gateway="gateway_b", rule_name="USD input",
         currency="USD", fee_rate_pct=1.5, is_illustrative=True, version="1")
     db.add_all([current, alternative]); db.commit()
-    result = create_savings_scenario(SavingsScenarioCreate(
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        create_savings_scenario(SavingsScenarioCreate(
         name="Currency validation", current_gateway="gateway_a", alternative_gateway="gateway_b",
         currency="INR", eligible_volume=1000, current_pricing_rule_id=current.id,
         alternative_pricing_rule_id=alternative.id,
-    ), db=db)
-    assert result["current_estimated_fee"] is not None
-    assert result["alternative_estimated_fee"] is None
-    assert result["reliable_recommendation"] is False
-    assert result["recommendation_status"] == "unavailable"
-    assert any("currency" in item.lower() for item in result["limitations"])
-    assert any("not independently verified" in item for item in result["limitations"])
-    assert any("fixed-fee basis" in item for item in result["limitations"])
+        ), db=db)
+    assert exc.value.status_code == 422
+    assert "currency" in str(exc.value.detail).lower()
 
 
 def test_pricing_scenario_requires_rule_country_and_method_context(db):
@@ -262,15 +278,15 @@ def test_pricing_scenario_requires_rule_country_and_method_context(db):
     db.add_all([current, alternative])
     db.commit()
 
-    missing_context = create_savings_scenario(SavingsScenarioCreate(
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as missing_context:
+        create_savings_scenario(SavingsScenarioCreate(
         name="Missing geography and method", current_gateway="gateway_a",
         alternative_gateway="gateway_b", currency="INR", eligible_volume=1000,
         current_pricing_rule_id=current.id, alternative_pricing_rule_id=alternative.id,
-    ), db=db)
-    assert missing_context["current_estimated_fee"] is None
-    assert missing_context["alternative_estimated_fee"] is not None
-    assert any("country" in item.lower() for item in missing_context["limitations"])
-    assert any("payment method" in item.lower() for item in missing_context["limitations"])
+        ), db=db)
+    assert missing_context.value.status_code == 422
+    assert "country" in str(missing_context.value.detail).lower()
 
     specified_context = create_savings_scenario(SavingsScenarioCreate(
         name="Specified geography and method", current_gateway="gateway_a",
@@ -285,6 +301,248 @@ def test_pricing_scenario_requires_rule_country_and_method_context(db):
     assert specified_context["reliable_recommendation"] is False
     assert any("no geography scope" in item for item in specified_context["limitations"])
     assert any("no payment-method scope" in item for item in specified_context["limitations"])
+    assert specified_context["fixed_fee_basis"] == "once_per_scenario"
+
+
+def test_illustrative_pricing_rules_persist_and_scenario_matches_manual_calculation(db):
+    # Explicitly hypothetical values for deterministic calculation verification.
+    current = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE Gateway A test rate", gateway="gateway_a",
+        currency="inr", country="in", payment_method="card", fee_rate_pct=2,
+        fixed_fee=5, fixed_fee_currency="INR", tax_on_fee_pct=18,
+        is_illustrative=True,
+    ), db=db)
+    alternative = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE Gateway B test rate", gateway="gateway_b",
+        currency="INR", country="IN", payment_method="card", fee_rate_pct=1.5,
+        fixed_fee=10, fixed_fee_currency="INR", tax_on_fee_pct=18,
+        is_illustrative=True,
+    ), db=db)
+    overlapping = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE Gateway A overlapping test rate", gateway="gateway_a",
+        currency="INR", country="IN", payment_method="card", fee_rate_pct=2.1,
+        is_illustrative=True,
+    ), db=db)
+
+    saved_rules = list_pricing_rules(db=db)
+    assert {rule["id"] for rule in saved_rules} >= {current["id"], alternative["id"], overlapping["id"]}
+    assert current["currency"] == "INR" and current["country"] == "IN"
+    assert current["fixed_fee_currency"] == "INR"
+    assert current["is_illustrative"] is True
+
+    # A's (10,000 * 2% + 5) * 1.18 = 241.90.
+    # B's (10,000 * 1.5% + 10) * 1.18 = 188.80.
+    # Difference = 53.10, or 21.95% of A's estimate.
+    result = create_savings_scenario(SavingsScenarioCreate(
+        name="ILLUSTRATIVE deterministic comparison", current_gateway="gateway_a",
+        alternative_gateway="gateway_b", currency="INR", country="IN",
+        payment_method="card", eligible_volume=10_000,
+        current_pricing_rule_id=current["id"], alternative_pricing_rule_id=alternative["id"],
+    ), db=db)
+    assert result["current_estimated_fee"] == "241.90"
+    assert result["alternative_estimated_fee"] == "188.80"
+    assert result["estimated_difference"] == "53.10"
+    assert result["estimated_difference_pct"] == "21.95"
+    assert result["estimated_lower_cost_gateway"] == "gateway_b"
+    assert result["reliable_recommendation"] is False
+    assert result["recommendation_status"] == "estimate_only_unverified_rates"
+    assert any("illustrative" in note.lower() for note in result["limitations"])
+
+    refreshed = get_savings_scenario(result["scenario_id"], db=db)
+    assert refreshed["current_estimated_fee"] == "241.900000"
+    assert refreshed["estimated_difference"] == "53.100000"
+    assert refreshed["estimated_difference_pct"] == "21.95"
+    history = list_savings_scenarios(db=db)
+    assert any(item["scenario_id"] == result["scenario_id"] for item in history)
+    saved = next(item for item in history if item["scenario_id"] == result["scenario_id"])
+    assert saved["estimated_difference"] == "53.100000"
+    assert saved["fixed_fee_basis"] == "once_per_scenario"
+
+
+def test_pricing_rule_validation_rejects_invalid_assumptions():
+    from pydantic import ValidationError
+
+    valid = dict(rule_name="ILLUSTRATIVE", gateway="gateway_a", currency="INR")
+    for invalid in (
+        {"rule_name": "   "}, {"fee_rate_pct": -0.1}, {"fee_rate_pct": 100.1},
+        {"fixed_fee": -1}, {"tax_on_fee_pct": 101}, {"min_fee": 20, "max_fee": 10},
+        {"effective_from": "2027-01-01T00:00:00Z", "effective_to": "2026-01-01T00:00:00Z"},
+        {"currency": "US$"}, {"currency": "USDT"}, {"fixed_fee_currency": "12"},
+        {"country": "USA"},
+    ):
+        with pytest.raises(ValidationError):
+            PricingRuleCreate(**(valid | invalid))
+    with pytest.raises(ValidationError):
+        PricingRuleCreate(gateway="gateway_a")
+
+
+def test_scenario_missing_rules_zero_volume_and_invalid_rule_ids_are_safe(db):
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SavingsScenarioCreate(name="bad", current_gateway="gateway_a", alternative_gateway="gateway_b",
+                              currency="INR", eligible_volume=-1)
+    with pytest.raises(ValidationError):
+        SavingsScenarioCreate(name="bad", current_gateway="gateway_a", alternative_gateway="gateway_b",
+                              currency="INR", eligible_volume=float("nan"))
+    with pytest.raises(ValidationError):
+        SavingsScenarioCreate(name="missing amount", current_gateway="gateway_a", alternative_gateway="gateway_b",
+                              currency="INR", current_pricing_rule_id="a", alternative_pricing_rule_id="b")
+    with pytest.raises(ValidationError):
+        SavingsScenarioCreate(name="same gateway", current_gateway="gateway_a", alternative_gateway="gateway_a",
+                              currency="INR", eligible_volume=100,
+                              current_pricing_rule_id="a", alternative_pricing_rule_id="b")
+    with pytest.raises(ValidationError):
+        SavingsScenarioCreate(name="same rule", current_gateway="gateway_a", alternative_gateway="gateway_b",
+                              currency="INR", eligible_volume=100,
+                              current_pricing_rule_id="a", alternative_pricing_rule_id="a")
+    with pytest.raises(ValidationError):
+        SavingsScenarioCreate(name="rules required", current_gateway="gateway_a", alternative_gateway="gateway_b",
+                              currency="INR", eligible_volume=100)
+
+    zero_rule = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE zero fee", gateway="gateway_a", currency="INR",
+        country="IN", payment_method="card", fee_rate_pct=0, fixed_fee=0,
+        fixed_fee_currency="INR", is_illustrative=True,
+    ), db=db)
+    zero_alternative = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE zero Gateway B fee", gateway="gateway_b", currency="INR",
+        country="IN", payment_method="card", fee_rate_pct=0, fixed_fee=0,
+        fixed_fee_currency="INR", is_illustrative=True,
+    ), db=db)
+    zero_result = create_savings_scenario(SavingsScenarioCreate(
+        name="Zero-volume scenario", current_gateway="gateway_a", alternative_gateway="gateway_b",
+        currency="INR", country="IN", payment_method="card", eligible_volume=0,
+        current_pricing_rule_id=zero_rule["id"], alternative_pricing_rule_id=zero_alternative["id"],
+    ), db=db)
+    assert zero_result["eligible_volume"] == "0.0"
+    assert zero_result["current_estimated_fee"] == "0.00"
+    stored_zero = get_savings_scenario(zero_result["scenario_id"], db=db)
+    assert stored_zero["eligible_volume"] == "0.000000"
+    assert stored_zero["current_estimated_fee"] == "0.000000"
+
+    with pytest.raises(HTTPException) as exc:
+        create_savings_scenario(SavingsScenarioCreate(
+            name="Invalid rule reference", current_gateway="gateway_a", alternative_gateway="gateway_b",
+            currency="INR", eligible_volume=1, current_pricing_rule_id="missing-rule",
+            alternative_pricing_rule_id=zero_alternative["id"],
+        ), db=db)
+    assert exc.value.status_code == 404
+
+
+def test_zero_max_fee_cap_is_applied(db):
+    rule = PricingRule(id="zero-max", gateway="gateway_a", rule_name="Zero maximum",
+                       currency="INR", fee_rate_pct=2, max_fee=0, version="1")
+    db.add(rule)
+    alternative = PricingRule(id="zero-max-alt", gateway="gateway_b", rule_name="Alternative rate",
+                              currency="INR", fee_rate_pct=1, version="1")
+    db.add(alternative)
+    db.commit()
+    result = create_savings_scenario(SavingsScenarioCreate(
+        name="Zero max cap", current_gateway="gateway_a", alternative_gateway="gateway_b",
+        currency="INR", eligible_volume=100, current_pricing_rule_id=rule.id,
+        alternative_pricing_rule_id=alternative.id,
+    ), db=db)
+    assert result["current_estimated_fee"] == "0.00"
+
+
+def test_pricing_rule_patch_is_persisted(db):
+    created = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE editable", gateway="gateway_a", currency="INR",
+        country="IN", payment_method="card", fee_rate_pct=2, fixed_fee=5,
+        fixed_fee_currency="INR", tax_on_fee_pct=18, min_fee=8, max_fee=50,
+        is_international=True, effective_from="2026-01-01T00:00:00Z",
+        effective_to="2027-01-01T00:00:00Z", notes="source note", is_illustrative=True,
+    ), db=db)
+    preserved = update_pricing_rule(created["id"], PricingRuleCreate(
+        rule_name="ILLUSTRATIVE edited", gateway="gateway_a", currency="INR",
+        fee_rate_pct=1.75, is_illustrative=True,
+    ), db=db)
+    assert preserved["country"] == "IN"
+    assert preserved["payment_method"] == "card"
+    assert preserved["fixed_fee"] == "5.000000"
+    assert preserved["min_fee"] == "8.000000"
+    assert preserved["max_fee"] == "50.000000"
+    assert preserved["is_international"] is True
+    assert preserved["effective_from"] == created["effective_from"]
+    assert preserved["effective_to"] == created["effective_to"]
+
+    updated = update_pricing_rule(created["id"], PricingRuleCreate(
+        rule_name="ILLUSTRATIVE edited", gateway="gateway_a", currency="INR",
+        fee_rate_pct=1.75, is_illustrative=True, country=None, payment_method=None,
+        fixed_fee=None, fixed_fee_currency=None, tax_on_fee_pct=None,
+        min_fee=None, max_fee=None, is_international=None,
+        effective_from=None, effective_to=None, notes=None,
+    ), db=db)
+    assert updated["rule_name"] == "ILLUSTRATIVE edited"
+    assert Decimal(updated["fee_rate_pct"]) == Decimal("1.75")
+    assert updated["country"] is None
+    assert updated["payment_method"] is None
+    assert updated["fixed_fee"] is None
+    assert updated["fixed_fee_currency"] is None
+    assert updated["tax_on_fee_pct"] is None
+    assert updated["min_fee"] is None
+    assert updated["max_fee"] is None
+    assert updated["is_international"] is None
+    assert updated["effective_from"] is None
+    assert updated["effective_to"] is None
+    assert updated["notes"] is None
+    assert next(rule for rule in list_pricing_rules(db=db) if rule["id"] == created["id"])["rule_name"] == "ILLUSTRATIVE edited"
+
+
+def test_pricing_rule_delete_only_removes_unreferenced_rules(db):
+    from fastapi import HTTPException
+    from app.main import app
+
+    assert any(
+        route.path == "/api/v1/pricing-rules/{rule_id}" and "DELETE" in route.methods
+        for route in app.routes
+    )
+
+    unreferenced = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE removable", gateway="gateway_a", currency="INR", fee_rate_pct=2,
+    ), db=db)
+    assert delete_pricing_rule(unreferenced["id"], db=db) == {"deleted": True, "id": unreferenced["id"]}
+    assert all(rule["id"] != unreferenced["id"] for rule in list_pricing_rules(db=db))
+    with pytest.raises(HTTPException) as missing:
+        delete_pricing_rule(unreferenced["id"], db=db)
+    assert missing.value.status_code == 404
+
+    referenced = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE protected", gateway="gateway_a", currency="INR", fee_rate_pct=2,
+    ), db=db)
+    referenced_alternative = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE protected alternative", gateway="gateway_b", currency="INR", fee_rate_pct=1,
+    ), db=db)
+    create_savings_scenario(SavingsScenarioCreate(
+        name="Scenario retains rule reference", current_gateway="gateway_a", alternative_gateway="gateway_b",
+        currency="INR", eligible_volume=100, current_pricing_rule_id=referenced["id"],
+        alternative_pricing_rule_id=referenced_alternative["id"],
+    ), db=db)
+    with pytest.raises(HTTPException) as conflict:
+        delete_pricing_rule(referenced["id"], db=db)
+    assert conflict.value.status_code == 409
+    assert any(rule["id"] == referenced["id"] for rule in list_pricing_rules(db=db))
+
+
+def test_missing_fee_rate_remains_explicit_and_cost_is_unavailable(db):
+    rule = create_pricing_rule(PricingRuleCreate(
+        rule_name="Legacy Gateway A rule without a rate", gateway="gateway_a", currency="INR",
+    ), db=db)
+    assert rule["fee_rate_pct"] is None
+    alternative = create_pricing_rule(PricingRuleCreate(
+        rule_name="ILLUSTRATIVE Gateway B with rate", gateway="gateway_b", currency="INR", fee_rate_pct=1,
+    ), db=db)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        create_savings_scenario(SavingsScenarioCreate(
+        name="Missing rate", current_gateway="gateway_a", alternative_gateway="gateway_b",
+        currency="INR", eligible_volume=1000, current_pricing_rule_id=rule["id"],
+        alternative_pricing_rule_id=alternative["id"],
+        ), db=db)
+    assert exc.value.status_code == 422
+    assert "percentage fee rate" in str(exc.value.detail)
 
 
 def test_vendor_seed_and_checks_preserve_evidence_gaps(db):

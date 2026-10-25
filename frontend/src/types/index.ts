@@ -124,23 +124,38 @@ export interface PricingRule {
   rule_name: string
   payment_method: string | null
   currency: string | null
+  fixed_fee_currency?: string | null
   country?: string | null
+  is_international?: boolean | null
   fee_rate_pct: string | null
   fixed_fee: string | null
   tax_on_fee_pct: string | null
+  min_fee?: string | null
+  max_fee?: string | null
+  effective_from?: string | null
+  effective_to?: string | null
   is_illustrative: boolean
   notes: string | null
   created_at: string
 }
 
 export interface SavingsScenario {
+  id?: string
   scenario_id: string
   name: string
   eligible_volume: string
   currency: string
+  current_gateway?: string
+  alternative_gateway?: string
+  payment_method?: string | null
+  country?: string | null
   current_estimated_fee: string | null
   alternative_estimated_fee: string | null
   estimated_difference: string | null
+  estimated_difference_pct?: string | null
+  estimated_lower_cost_gateway?: string | null
+  fixed_fee_basis?: string
+  created_at?: string
   is_estimate: boolean
   limitations: string[]
   assumptions_note: string

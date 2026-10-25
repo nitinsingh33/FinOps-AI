@@ -52,7 +52,9 @@ export const fetchAuditTrail = (id: string) => api.get(`/exceptions/${id}/audit`
 export const fetchPricingRules = () => api.get('/pricing-rules').then(r => r.data)
 export const createPricingRule = (body: unknown) => api.post('/pricing-rules', body).then(r => r.data)
 export const updatePricingRule = (id: string, body: unknown) => api.patch(`/pricing-rules/${id}`, body).then(r => r.data)
+export const deletePricingRule = (id: string) => api.delete(`/pricing-rules/${id}`).then(r => r.data)
 export const createSavingsScenario = (body: unknown) => api.post('/savings-scenarios', body).then(r => r.data)
+export const fetchSavingsScenarios = () => api.get('/savings-scenarios').then(r => r.data)
 
 // ─── Vendor compliance ────────────────────────────────────────
 export const fetchVendors = (source?: string) => api.get('/vendor-compliance/vendors', { params: source ? { source } : {} }).then(r => r.data)

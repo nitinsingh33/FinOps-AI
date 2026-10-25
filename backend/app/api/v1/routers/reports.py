@@ -19,80 +19,158 @@ router = APIRouter()
 
 @router.get("/reports/executive-summary", response_class=HTMLResponse)
 def executive_summary(db: Session = Depends(get_db)):
-    """A concise, printable summary backed only by persisted source data."""
+    """A concise, printable finance brief backed by persisted source data."""
     from app.services.analytics_service import get_gateway_cost_analysis, get_overview_stats, get_settlement_analysis
-    from app.models.models import PricingRule, ReconciliationRun, SavingsScenario
+    from app.models.models import PricingRule
 
     data = get_overview_stats(db)
     costs = get_gateway_cost_analysis(db)
     settlements = get_settlement_analysis(db)
-    run = db.query(ReconciliationRun).filter_by(status="completed").order_by(ReconciliationRun.created_at.desc()).first()
+    monthly = costs.get("monthly_breakdowns", [])
+    settlement_rows = settlements.get("monthly_settlement_metrics", [])
+    months = sorted({row["month"] for row in monthly} | {row["month"] for row in settlement_rows})
+    period = f"{months[0]} – {months[-1]}" if months else "No dated imported records"
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    monthly_rows = []
-    for row in costs.get("monthly_breakdowns", [])[-6:]:
-        cost = (f"{row['observed_cost_currency']} {row['observed_cost']:,.2f}"
-                if row.get("observed_cost") is not None else
-                "Incomplete observed amounts" if row.get("observed_cost_unavailable_reason") == "missing_amounts"
-                else "Fee/tax currencies differ")
-        monthly_rows.append(
-            f"<tr><td>{escape(row['month'])}</td><td>{escape(row['gateway'])}</td>"
-            f"<td>{row['transaction_count']:,}</td>"
-            f"<td>{escape(row['currency'])} {row['gross_volume']:,.2f}</td>"
-            f"<td>{escape(row['fee_currency'])} {row['observed_fees']:,.2f}"
-            f" ({row['fee_records_missing_amount']} missing)</td>"
-            f"<td>{escape(row['tax_currency'])} {row['observed_tax']:,.2f} ({row['tax_records_missing_amount']} missing); cost {escape(cost)}</td></tr>"
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for row in monthly:
+        groups.setdefault((row["month"], row["gateway"]), []).append(row)
+    settlement_groups: dict[tuple[str, str], list[dict]] = {}
+    for row in settlement_rows:
+        settlement_groups.setdefault((row["month"], row["gateway"]), []).append(row)
+
+    # Missing gross values are not available from the analytics aggregate, so
+    # count them from the same source records for explicit display and rate safety.
+    gross_missing: dict[tuple[str, str, str], int] = {}
+    for gateway, query in (
+        ("gateway_a", db.query(Payment.transacted_at, Payment.currency, Payment.gross_amount).filter(
+            Payment.gateway == "gateway_a", Payment.status == "captured")),
+        ("gateway_b", db.query(GatewayTransaction.transacted_at, GatewayTransaction.currency, GatewayTransaction.gross_amount).filter(
+            GatewayTransaction.gateway == "gateway_b", GatewayTransaction.txn_type == "charge")),
+    ):
+        for transacted_at, currency, amount in query.all():
+            if transacted_at and amount is None:
+                key = (transacted_at.strftime("%Y-%m"), gateway, currency)
+                gross_missing[key] = gross_missing.get(key, 0) + 1
+
+    performance_rows = []
+    all_groups = sorted(set(groups) | set(settlement_groups))
+    for month, gateway in all_groups[-5:]:
+        rows = groups.get((month, gateway), [])
+        currency_groups: dict[str, list[dict]] = {}
+        for row in rows:
+            currency_groups.setdefault(row["currency"], []).append(row)
+        currency = max(
+            currency_groups,
+            key=lambda code: (sum(row["gross_volume"] for row in currency_groups[code]), code),
+            default=None,
         )
-    monthly_table = "".join(monthly_rows) or '<tr><td colspan="6">No monthly data available</td></tr>'
+        primary_rows = currency_groups.get(currency, []) if currency else []
+        tx_count = sum(row["transaction_count"] for row in primary_rows)
+        tx_count_text = f"{tx_count:,}" if primary_rows else "—"
+        gross = sum(row["gross_volume"] for row in primary_rows)
+        missing_gross = gross_missing.get((month, gateway, currency), 0) if currency else 0
+        gross_text = f"{escape(currency)} {gross:,.2f}" if currency else "—"
+        if missing_gross:
+            gross_text += f" ({missing_gross} missing)"
 
-    timing_rows = []
-    for row in settlements.get("monthly_settlement_metrics", [])[-6:]:
-        timing = "—" if row["median_hours"] is None else f"{row['median_hours']:,.1f} h median"
-        timing_rows.append(
-            f"<tr><td>{escape(row['month'])}</td><td>{escape(row['gateway'])}</td>"
-            f"<td>{escape(row['currency'])}</td><td>{escape(row['timing_basis'])}</td>"
-            f"<td>{row['timed_rows']}/{row['source_rows']} timed · {escape(timing)}; "
-            f"{row['explicitly_unsettled']} unsettled, {row['completion_time_unsettled_conflict']} time/status conflict</td></tr>"
+        fee_currencies = {row["fee_currency"] for row in primary_rows}
+        fee_currency = next(iter(fee_currencies)) if len(fee_currencies) == 1 else None
+        fee_missing = sum(row["fee_records_missing_amount"] for row in primary_rows)
+        fee = sum(row["observed_fees"] for row in primary_rows)
+        if not primary_rows:
+            fee_text = "—"
+        elif fee_currency:
+            fee_text = f"{escape(fee_currency)} {fee:,.2f}" + (f" ({fee_missing} missing)" if fee_missing else "")
+        else:
+            fee_text = "Multiple currencies"
+        rate = None
+        if currency and fee_currency == currency and fee_missing == 0 and missing_gross == 0 and gross > 0:
+            rate = fee / gross * 100
+        rate_text = f"{rate:.3f}%" if rate is not None else "—"
+
+        basis = "balance available_on" if gateway == "gateway_b" else "transaction settled_at"
+        timings = [
+            row for row in settlement_groups.get((month, gateway), [])
+            if row["currency"] == currency and row["timing_basis"] == basis
+        ]
+        timing = max(timings, key=lambda row: row["source_rows"]) if timings else None
+        median_text = f"{timing['median_hours']:,.1f} h" if timing and timing.get("median_hours") is not None else "—"
+        performance_rows.append(
+            f"<tr><td>{escape(gateway.replace('_', ' ').title())} · {escape(month)}</td>"
+            f"<td class=\"num\">{tx_count_text}</td><td class=\"num\">{gross_text}</td>"
+            f"<td class=\"num\">{fee_text}</td><td class=\"num\">{rate_text}</td>"
+            f"<td class=\"num\">{median_text}</td></tr>"
         )
-    timing_table = "".join(timing_rows) or '<tr><td colspan="5">No dated settlement evidence available</td></tr>'
+    performance_table = "".join(performance_rows) or '<tr><td colspan="6">No monthly payment-cost data available</td></tr>'
 
-    latest = (f"{run.id[:8]} · {run.matched_records or 0} matched · {run.exception_count or 0} exceptions · {run.completed_at.isoformat() if run.completed_at else 'completed'}"
-              if run else "No completed reconciliation run")
-    exposure = {}
-    if run:
-        for exception in db.query(ReconciliationException).filter_by(run_id=run.id).all():
-            if exception.currency and exception.amount_at_stake is not None:
-                exposure[exception.currency] = exposure.get(exception.currency, 0.0) + float(exception.amount_at_stake)
-    exposure_text = ("; ".join(f"{escape(currency)} {amount:,.2f}" for currency, amount in sorted(exposure.items()))
-                     if exposure else "No amount-at-stake values available")
-    if exposure:
-        exposure_text += " (flags can overlap; not a net loss total)"
+    open_count = data.get("open_exceptions", 0)
+    open_categories = data.get("open_exceptions_by_category", {})
+    top_categories = [name for name, _ in sorted(open_categories.items(), key=lambda item: (-item[1], item[0]))[:2]]
+    category_text = ", ".join(escape(name) for name in top_categories) or "no open categories recorded"
+    reconciliation_finding = (
+        f"Open items are led by {category_text}. These are investigation flags, not confirmed losses."
+        if top_categories else "No open reconciliation investigation items are recorded."
+    )
 
-    scenario = db.query(SavingsScenario).order_by(SavingsScenario.created_at.desc()).first()
-    scenario_text = "No saved pricing scenario. No routing recommendation can be made."
-    if scenario and scenario.estimated_difference is not None:
-        diff = float(scenario.estimated_difference)
-        lower_cost_gateway = scenario.alternative_gateway if diff > 0 else scenario.current_gateway
-        scenario_text = (
-            f"Latest scenario “{escape(scenario.name)}”: estimated difference "
-            f"{escape(scenario.currency)} {abs(diff):,.2f} in favor of {escape(lower_cost_gateway)} for its stated volume. "
-            "Estimate only; not confirmed savings or a routing recommendation."
+    b_timing = [
+        row for row in settlement_rows
+        if row["gateway"] == "gateway_b" and row["timing_basis"] == "balance available_on"
+    ]
+    b_unsettled = sum(row["explicitly_unsettled"] for row in b_timing)
+    b_source_count = sum(row["source_rows"] for row in b_timing)
+    representative = max(b_timing, key=lambda row: row["source_rows"]) if b_timing else None
+    if representative and representative.get("median_hours") is not None:
+        settlement_finding = (
+            f"Gateway B’s largest dated group ({escape(representative['month'])}, {escape(representative['currency'])}) "
+            f"shows a {representative['median_hours']:,.1f} h median; {b_unsettled:,} of {b_source_count:,} source rows are marked unsettled."
         )
-    elif scenario:
-        scenario_text = "Latest saved scenario is incomplete; comparable estimates are unavailable."
-    has_rules = db.query(PricingRule).count() > 0
-    routing_note = ("Pricing inputs have no independently verified contract evidence; confirm signed rates before acting."
-                    if has_rules else "No pricing rules exist, so no reliable gateway recommendation is available.")
+    elif b_timing:
+        settlement_finding = f"Gateway B has {b_unsettled:,} of {b_source_count:,} source rows marked unsettled; median timing is unavailable."
+    else:
+        settlement_finding = "No dated Gateway B settlement timing is available in the imported records."
 
-    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>FinOps AI Executive Summary</title>
-    <style>body{{font:11px Arial,sans-serif;color:#172033;margin:22px}}h1{{font-size:21px;margin-bottom:3px}}h2{{font-size:14px;margin:12px 0 4px}}.muted{{color:#526079}}.grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}}.tile{{border:1px solid #d7deea;border-radius:6px;padding:8px}}.value{{font-size:18px;font-weight:bold;margin-top:3px}}table{{border-collapse:collapse;width:100%;margin-top:4px;font-size:10px}}td,th{{padding:5px;border-bottom:1px solid #d7deea;text-align:left}}.note{{margin-top:9px;padding:8px;background:#eef4ff}}@page{{size:A4 portrait;margin:10mm}}@media print{{body{{margin:0}}}}</style></head><body>
-    <h1>FinOps AI · Executive Summary</h1><div class="muted">Generated from imported database records. Figures stay in source currencies.</div>
-    <div class="grid"><div class="tile">Payment records<div class="value">{data.get('total_payments', 0):,}</div></div><div class="tile">Gateway ledger records<div class="value">{data.get('total_transactions', 0):,}</div></div><div class="tile">Refund records<div class="value">{data.get('total_refunds', 0):,}</div></div><div class="tile">Open exceptions<div class="value">{data.get('open_exceptions', 0):,}</div></div></div>
-    <h2>Observed monthly cost (latest 6 groups)</h2><table><thead><tr><th>Month</th><th>Gateway</th><th>Transactions</th><th>Gross</th><th>Observed fees</th><th>Observed tax and cost</th></tr></thead><tbody>{monthly_table}</tbody></table>
-    <h2>Settlement timing (latest 6 source groups)</h2><table><thead><tr><th>Month</th><th>Gateway</th><th>Currency</th><th>Source timing</th><th>Coverage / median</th></tr></thead><tbody>{timing_table}</tbody></table>
-    <h2>Reconciliation and exceptions</h2><p>{escape(latest)}. Amount at stake by currency: {exposure_text}.</p>
-    <h2>Savings scenario and routing</h2><p>{scenario_text} {escape(routing_note)}</p>
-    <div class="note">Fees and taxes are source-observed, not verified against contracts. Missing amounts are not zero. Gateway B availability and payout-effective times are not independent bank evidence; no separate payout transfer ledger was supplied. Exception flags can overlap. Scenario results are estimates, never confirmed savings.</div>
-    </body></html>""")
+    cost_finding = "Fees are source-observed; without signed pricing, contractual overcharges cannot be confirmed."
+    if db.query(PricingRule).count() == 0:
+        cost_finding += " Savings estimates are unavailable until pricing rules are configured."
+
+    kpis = (
+        ("Payment records", data.get("total_payments", 0)),
+        ("Gateway ledger records", data.get("total_transactions", 0)),
+        ("Open investigation items", open_count),
+        ("Refund records", data.get("total_refunds", 0)),
+    )
+    kpi_html = "".join(
+        f'<div class="kpi"><div class="kpi-label">{escape(label)}</div><div class="kpi-value">{value:,}</div></div>'
+        for label, value in kpis
+    )
+    finding_html = "".join(
+        f'<article class="finding"><div class="tag">{escape(label)}</div><p>{text}</p></article>'
+        for label, text in (
+            ("Settlement", settlement_finding),
+            ("Reconciliation", reconciliation_finding),
+            ("Cost", cost_finding),
+        )
+    )
+    actions = (
+        "Review Gateway B settlement exceptions against independent payout evidence.",
+        "Obtain signed gateway pricing and validate fee components.",
+        "Investigate the highest-priority reconciliation exceptions.",
+    )
+    actions_html = "".join(f"<li>{escape(action)}</li>" for action in actions)
+    links = '<a href="/analytics">Detailed Analytics</a> · <a href="/reconciliation">Detailed Reconciliation</a>'
+
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8"><title>FinOps AI — Payment Gateway Executive Summary</title>
+    <style>
+      *{{box-sizing:border-box}}body{{margin:0;background:#fff;color:#172b4d;font:10pt/1.42 Arial,sans-serif}}main{{max-width:1120px;margin:0 auto;padding:25px 30px}}header{{border-bottom:2px solid #dce6f3;padding-bottom:12px}}h1{{font-size:21pt;line-height:1.15;margin:0 0 6px;color:#10243e}}.sub{{color:#52657d;font-size:9pt}}h2{{font-size:12pt;margin:19px 0 9px;color:#183a63}}.kpis{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:17px 0 20px}}.kpi{{padding:12px 14px;border:1px solid #dce5ef;border-top:3px solid #4d83bd;border-radius:4px}}.kpi-label{{font-size:8pt;color:#53677f}}.kpi-value{{font-size:18pt;font-weight:700;margin-top:3px}}.findings{{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}}.finding{{border-left:2px solid #8db3da;padding:1px 0 1px 11px}}.tag{{font-size:8pt;font-weight:bold;color:#315e8d;text-transform:uppercase;letter-spacing:.05em}}.finding p{{margin:4px 0 0}}table{{width:100%;border-collapse:collapse;table-layout:fixed;font-size:9pt}}th{{font-size:8pt;color:#53677f;font-weight:600;border-bottom:1px solid #bac9da;padding:8px 7px;text-align:left}}td{{padding:9px 7px;border-bottom:1px solid #e5ebf2;vertical-align:top;overflow-wrap:anywhere}}.num{{text-align:right;font-variant-numeric:tabular-nums}}.comparison th:nth-child(1){{width:20%}}.comparison th:nth-child(2){{width:10%}}.comparison th:nth-child(3){{width:22%}}.comparison th:nth-child(4){{width:20%}}.comparison th:nth-child(5){{width:13%}}.comparison th:nth-child(6){{width:15%}}.actions{{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin:7px 0 18px;padding:0;list-style:none;counter-reset:action}}.actions li{{counter-increment:action;border-top:1px solid #dce5ef;padding-top:8px;color:#263d59}}.actions li:before{{content:counter(action) ". ";font-weight:bold;color:#3974ac}}footer{{border-top:1px solid #dce5ef;padding-top:8px;color:#53677f;font-size:8pt}}a{{color:#285e98;text-decoration:none}}@page{{size:A4 landscape;margin:13mm}}@media print{{main{{max-width:none;padding:0}}h2{{margin-top:16px}}.kpis{{margin:12px 0 15px}}thead{{display:table-header-group}}tr{{break-inside:avoid}}}}
+    </style></head><body><main>
+    <header><h1>FinOps AI — Payment Gateway Executive Summary</h1><div class="sub">Reporting period: {escape(period)} · Imported payment, gateway ledger and refund records · Source currency amounts</div></header>
+    <section class="kpis">{kpi_html}</section>
+    <section><h2>Key findings</h2><div class="findings">{finding_html}</div></section>
+    <section><h2>Gateway comparison</h2><table class="comparison"><thead><tr><th>Gateway · Month</th><th class="num">Txns¹</th><th class="num">Gross¹</th><th class="num">Observed fees²</th><th class="num">Effective rate³</th><th class="num">Median settlement⁴</th></tr></thead><tbody>{performance_table}</tbody></table><div class="sub">Up to five latest month/gateway groups, shown in the primary gross-volume currency. Full currency details: {links}.</div></section>
+    <section><h2>Recommended next steps</h2><ol class="actions">{actions_html}</ol></section>
+    <footer>¹ Primary currency group only; missing gross values are shown. ² Observed fee values; missing amounts are shown. ³ Shown only when fee and payment currencies match and amounts are complete. ⁴ Source-reported timing, not independent bank evidence. Contract pricing and independent bank payout evidence were not supplied; savings and overcharges are not confirmed. {links}. Generated {escape(generated_at)}.</footer>
+    </main></body></html>""")
 
 
 @router.get("/reports/exceptions/download")
