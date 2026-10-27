@@ -40,6 +40,18 @@ flowchart LR
 
 The frontend calls API routes under `/api/v1`. PostgreSQL stores normalized records and results; uploaded source files are stored separately. Redis and Celery process background jobs when configured.
 
+## One-command local demo with Docker
+
+Install and start Docker Desktop, then run this from the repository root:
+
+```powershell
+docker compose up --build
+```
+
+When the services report ready, open [http://localhost:5173](http://localhost:5173). Compose starts PostgreSQL, Redis, the API (and applies database migrations), the Celery worker, and the frontend. The API is also available at [http://localhost:8000/api/docs](http://localhost:8000/api/docs). On first run Docker downloads the images and builds the app, so it can take a few minutes. The four payment workbooks are in `data/`; import them through **Data Uploads**. The invoice PDFs remain excluded from Git and must be provided separately if permitted.
+
+Stop the services with `Ctrl+C`. To start them in the background, use `docker compose up --build -d`; later stop them with `docker compose down`. The local database and Redis data remain in Docker volumes between normal stops. Avoid `docker compose down -v` unless you intend to erase that local demo data. This Compose setup is for local evaluation, not a public production deployment; it uses a local demo database password and the app does not provide production authentication.
+
 ## Sample data
 
 The four payment workbooks are in `data/`:
